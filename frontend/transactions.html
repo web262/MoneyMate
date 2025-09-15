@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MoneyMate — Transactions</title>
+
+  <link rel="icon" href="images/favicon-32x32.png" type="image/png" />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet"/>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet"/>
+  <link rel="stylesheet" href="css/styles.css"/>
+  <link rel="stylesheet" href="css/transactions.css"/>
+</head>
+<body>
+  <!-- Nav -->
+  <nav class="navbar navbar-dark navbar-expand-lg">
+    <div class="container-xxl">
+      <a class="navbar-brand fw-bold" href="index.html">Money<span>Mate</span></a>
+      <button class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#nav"><span class="navbar-toggler-icon"></span></button>
+      <div id="nav" class="collapse navbar-collapse">
+        <ul class="navbar-nav me-auto">
+          <li class="nav-item"><a class="nav-link" href="dashboard.html">Dashboard</a></li>
+          <li class="nav-item"><a class="nav-link" href="budgets.html">Budgets</a></li>
+          <li class="nav-item"><a class="nav-link active" href="transactions.html">Transactions</a></li>
+          <li class="nav-item"><a class="nav-link" href="goals.html">Goals</a></li>
+          <li class="nav-item"><a class="nav-link" href="settings.html">Settings</a></li>
+        </ul>
+        <button id="logout" class="btn btn-outline-light">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container-xxl py-4">
+    <!-- Toolbar with filters + Import/Export -->
+    <div class="glass p-3 mb-3">
+      <div class="d-flex flex-wrap gap-2 align-items-end">
+        <div>
+          <label class="form-label">Type</label>
+          <select id="filterType" class="form-select form-select-sm">
+            <option value="all">All</option>
+            <option value="expense">Expense</option>
+            <option value="income">Income</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Category</label>
+          <select id="filterCategory" class="form-select form-select-sm">
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">From</label>
+          <input id="filterStart" type="date" class="form-control form-control-sm"/>
+        </div>
+        <div>
+          <label class="form-label">To</label>
+          <input id="filterEnd" type="date" class="form-control form-control-sm"/>
+        </div>
+
+        <div class="ms-auto d-flex gap-2">
+          <div class="btn-group">
+            <button class="btn btn-outline-light btn-sm dropdown-toggle" data-bs-toggle="dropdown">
+              Import/Export
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><button class="dropdown-item" id="btnExport">Export CSV</button></li>
+              <li>
+                <label class="dropdown-item mb-0" for="fileImport">Import CSV…</label>
+                <input id="fileImport" type="file" accept=".csv,text/csv" class="d-none">
+              </li>
+              <li><button class="dropdown-item" id="btnTemplate">Download Template</button></li>
+            </ul>
+          </div>
+          <button class="btn btn-outline-light btn-sm" id="btnReset"><i class="fa-solid fa-rotate-left me-1"></i>Reset</button>
+          <button class="btn btn-mm btn-sm" data-bs-toggle="modal" data-bs-target="#txModal"><i class="fa-solid fa-plus me-1"></i>New Transaction</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="glass p-0">
+      <div class="table-responsive">
+        <table class="table table-dark table-hover align-middle mb-0 transactions-table">
+          <thead class="table-head sticky-top">
+            <tr>
+              <th style="width: 140px;">Date</th>
+              <th>Description</th>
+              <th style="width: 160px;">Category</th>
+              <th style="width: 120px;">Type</th>
+              <th class="text-end" style="width: 160px;">Amount</th>
+              <th style="width: 120px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="txBody"></tbody>
+        </table>
+      </div>
+      <div class="d-flex justify-content-between align-items-center p-2 small">
+        <div class="muted" id="summaryLabel">0 items</div>
+        <div class="d-flex align-items-center gap-2">
+          <button class="btn btn-outline-light btn-sm" id="prevPage" disabled>Prev</button>
+          <span class="muted" id="pageInfo">1 / 1</span>
+          <button class="btn btn-outline-light btn-sm" id="nextPage" disabled>Next</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Add/Edit Modal -->
+  <div class="modal fade" id="txModal" tabindex="-1">
+    <div class="modal-dialog">
+      <form class="modal-content" id="txForm">
+        <div class="modal-header">
+          <h5 class="modal-title">Add Transaction</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" name="id" />
+          <div class="mb-2">
+            <label class="form-label">Type</label>
+            <select class="form-select" name="type" required>
+              <option value="expense">Expense</option>
+              <option value="income">Income</option>
+            </select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Amount</label>
+            <input class="form-control" name="amount" type="number" min="0.01" step="0.01" required />
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Description (auto-categorizes)</label>
+            <input class="form-control" name="description" placeholder="e.g., Uber to airport" />
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Category (optional)</label>
+            <input class="form-control" name="category" placeholder="Leave blank to auto-categorize" />
+          </div>
+          <div class="mb-0">
+            <label class="form-label">Date</label>
+            <input class="form-control" name="created_at" type="datetime-local" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-mm" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast-container position-fixed top-0 end-0 p-3">
+    <div id="toast" class="toast text-bg-dark border-0" role="alert">
+      <div class="d-flex">
+        <div class="toast-body" id="toastMsg">Saved.</div>
+        <button class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script type="module" src="js/api.js"></script>
+  <script type="module" src="js/transactions.js"></script>
+</body>
+</html>

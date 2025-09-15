@@ -1,0 +1,127 @@
+/* ================== MoneyMate Dark Theme (merged) ================== */
+/* Base palette */
+:root{
+  --mm-bg:#0b132b;                 /* page bg (very dark blue) */
+  --mm-bg-grad:#111827;            /* gradient top */
+  --mm-panel:rgba(31,41,55,.85);   /* glass card */
+  --mm-border:rgba(255,255,255,.08);
+
+  /* your softer text */
+  --mm-text:#dbe7f3;
+  --mm-muted:#9fb3c8;
+
+  --mm-accent:#22c55e;             /* green */
+  --mm-accent-2:#38bdf8;           /* cyan */
+}
+
+html,body{height:100%;}
+body{
+  color:var(--mm-text);
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(56,189,248,.12), transparent 60%),
+    radial-gradient(900px 500px at 120% 30%, rgba(34,197,94,.10), transparent 55%),
+    linear-gradient(180deg, var(--mm-bg-grad) 0%, var(--mm-bg) 100%);
+}
+
+/* ===== Navbar (fixes “washed out” header) ===== */
+.navbar{
+  background: linear-gradient(180deg, rgba(17,24,39,.95), rgba(17,24,39,.85));
+  border-bottom: 1px solid var(--mm-border);
+}
+.navbar-brand span{ color: var(--mm-accent); }
+
+/* ===== Glass cards ===== */
+.glass{
+  background: var(--mm-panel);
+  border: 1px solid var(--mm-border);
+  border-radius: 14px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0,0,0,.25);
+}
+
+/* Form controls inside glass */
+.glass .form-label{ color: var(--mm-muted); }
+.glass .form-control,
+.glass .form-select{
+  background: rgba(255,255,255,.06);
+  color: var(--mm-text);
+  border-color: rgba(255,255,255,.15);
+}
+.glass .form-control::placeholder{ color: #93A3B8; }
+.glass .form-control:focus,
+.glass .form-select:focus{
+  border-color: var(--mm-accent);
+  box-shadow: 0 0 0 .2rem rgba(45,212,122,.15);
+}
+
+/* Buttons */
+.btn-mm{
+  background: var(--mm-accent);
+  color:#071521;
+  border-color: var(--mm-accent);
+}
+.btn-mm:hover{ filter: brightness(.95); }
+.btn-outline-light{ border-color: rgba(255,255,255,.6); }
+
+/* Helpers */
+.muted, .text-secondary{ color: var(--mm-muted) !important; }
+.plan-card{ background: rgba(16,24,39,.72) !important; }
+
+/* ================== Your Dark FAQ block ================== */
+/* Use Bootstrap accordion CSS variables to force dark theme */
+#faqAccordion{
+  --bs-accordion-color: #dbe7f3;               /* body text */
+  --bs-accordion-bg: rgba(17,24,39,.72);       /* header/body bg */
+  --bs-accordion-border-color: rgba(255,255,255,.08);
+
+  --bs-accordion-btn-color: #eaf2fb;           /* header text */
+  --bs-accordion-btn-bg: rgba(17,24,39,.72);
+
+  --bs-accordion-active-color: #ffffff;        /* opened header text */
+  --bs-accordion-active-bg: rgba(34,197,94,.10);
+
+  --bs-accordion-btn-focus-box-shadow: 0 0 0 .25rem rgba(34,197,94,.25);
+}
+/* Make sure Bootstrap's light icon doesn't reappear */
+#faqAccordion .accordion-button::after{
+  filter: invert(1) opacity(.7);
+}
+/* Extra safety: kill any leftover white backgrounds */
+#faqAccordion .accordion-item,
+#faqAccordion .accordion-button,
+#faqAccordion .accordion-body{
+  background-color: transparent !important;
+  color: var(--mm-text) !important;
+  border-color: rgba(255,255,255,.08) !important;
+}
+
+/* ================== Dark glass modals (yours) ================== */
+.modal-content{
+  background: rgba(16, 24, 39, .92);
+  color: #DBE7F3;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 18px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 20px 40px rgba(2,6,23,.45);
+}
+.modal-header,
+.modal-footer{ border-color: rgba(255,255,255,.08); }
+
+.modal .form-label{ color: #E2E8F0; }
+.modal .form-control,
+.modal .form-select{
+  background: rgba(255,255,255,.04);
+  border-color: rgba(255,255,255,.12);
+  color: #ECF3FB;
+}
+.modal .form-control::placeholder{ color: #93A3B8; }
+.modal .form-control:focus,
+.modal .form-select:focus{
+  border-color: #2DD47A;
+  box-shadow: 0 0 0 .2rem rgba(45,212,122,.15);
+}
+.modal .btn-close{
+  filter: invert(1) grayscale(100%);
+  opacity: .9;
+}

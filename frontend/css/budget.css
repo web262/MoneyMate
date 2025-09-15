@@ -1,0 +1,35 @@
+:root{
+  --mm-bg:#0b1220; --mm-card:#101827cc; --mm-border:rgba(255,255,255,.08);
+  --mm-text:#dbe7f3; --mm-muted:#9fb3c8; --mm-accent:#22c55e;
+}
+body{ background: var(--mm-bg); color: var(--mm-text); font-family:"Montserrat",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif }
+.navbar{ backdrop-filter: blur(10px); background: rgba(16,24,39,.6)!important; border-bottom:1px solid var(--mm-border) }
+.navbar .navbar-brand span{ color: var(--mm-accent) }
+
+.glass{ background: var(--mm-card); border:1px solid var(--mm-border); border-radius:18px; backdrop-filter: blur(10px); box-shadow:0 20px 40px rgba(2,6,23,.35) }
+.muted{ color: var(--mm-muted) }
+.btn-mm{ background: var(--mm-accent); border-color: var(--mm-accent); color:#06110b }
+
+.card-budget{ background: rgba(255,255,255,.03); border:1px solid var(--mm-border); border-radius:14px; padding:12px }
+.card-budget .title{ font-weight:600 }
+.progress{ height:10px }
+.progress .bg-ok{ background:#22c55e }     /* green   */
+.progress .bg-warn{ background:#f59e0b }   /* amber   */
+.progress .bg-bad{ background:#ef4444 }    /* red     */
+
+/* Modal dark-theme */
+.modal-content{
+  background: rgba(16,24,39,.92);
+  color:#DBE7F3;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:18px;
+  backdrop-filter:blur(10px);
+}
+.modal .form-label{ color:#E2E8F0 }
+.modal .form-control{
+  background: rgba(255,255,255,.04);
+  border-color: rgba(255,255,255,.12);
+  color:#ECF3FB
+}
+.modal .form-control::placeholder{ color:#93A3B8 }
+.modal .btn-close{ filter: invert(1) grayscale(100%); opacity:.9 }
