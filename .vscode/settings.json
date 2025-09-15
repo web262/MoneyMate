@@ -1,0 +1,9 @@
+{
+  // Fallback for all OSes (optional)
+  "emulator.emulatorPath": 
+    "C:\\Users\\ADMIN\\AppData\\Local\\Android\\Sdk\\emulator\\emulator.exe",
+
+  // Windows‐only override
+  "emulator.emulatorPathWindows": 
+    "C:\\Users\\ADMIN\\AppData\\Local\\Android\\Sdk\\emulator\\emulator.exe"
+}

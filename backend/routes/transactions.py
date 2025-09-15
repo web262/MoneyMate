@@ -1,77 +1,293 @@
-from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from models.database import connect_db
+# backend/routes/transactions.py
+from flask import Blueprint, request, jsonify, session, Response
 from datetime import datetime
+from ..database import get_db
+from .auth import login_required
 
-transactions_bp = Blueprint('transactions', __name__)
+# Give the blueprint a prefix so all routes live under /api/transactions
+tx_bp = Blueprint("transactions", __name__, url_prefix="/api/transactions")
 
-@transactions_bp.route('/add', methods=['POST'])
-@jwt_required()
-def add_transaction():
-    user_id = get_jwt_identity()
-    data=request.get_json()
+def ensure_schema():
+    db = get_db()
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            type TEXT CHECK(type IN ('income','expense')) NOT NULL,
+            amount REAL NOT NULL,
+            category TEXT,
+            description TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
+    db.commit()
 
-    tx_type = data.get('type')
-    category = data.get('category')
-    amount = data.get('amount')
+@tx_bp.before_app_request
+def before_any():
+    ensure_schema()
 
-    if not all([tx_type, category, amount]):
-        return jsonify({"error": "Missing fields"}), 400
-    
-    conn = connect_db()
-    if conn is None:
-        return jsonify({"error": "Database connection failed"}), 500
-    cursor=conn.cursor(dictionary=True)
+# ---- rudimentary auto-categorization ----
+KEYWORDS = {
+    "groceries": ["grocery","supermarket","whole foods","aldi","lidl","shoprite"],
+    "transport": ["uber","lyft","bus","train","metro","fuel","gas"],
+    "rent": ["rent","landlord","apartment"],
+    "utilities": ["electric","water","gas bill","internet","wifi"],
+    "dining": ["restaurant","coffee","cafe","pizza","kfc","mcdonald","burger"],
+    "shopping": ["amazon","mall","target","walmart","clothes","shoe"],
+    "health": ["pharmacy","doctor","hospital","clinic"],
+    "entertainment": ["netflix","spotify","movie","game"],
+    "salary": ["salary","payroll","paycheck","wage"],
+    "freelance": ["freelance","contract","gig","upwork","fiverr"],
+    "interest": ["interest","dividend"]
+}
 
+def auto_category(tx_type: str, description: str) -> str:
+    if not description:
+        return "Income" if tx_type == "income" else "Uncategorized"
+    desc = description.lower()
+    for cat, keys in KEYWORDS.items():
+        if any(k in desc for k in keys):
+            return cat.capitalize()
+    return "Income" if tx_type == "income" else "Uncategorized"
 
-    cursor.execute(""" INSERT INTO transactions (user_id, type, category, amount, created_at)
-                   Values (%s, %s, %s, %s, NOW()) """, (user_id, tx_type, category, amount))
-    conn.commit()
+# ---- create (supports both '/' and '/add') ----
+@tx_bp.post("/")
+@tx_bp.post("/add")
+@login_required
+def create_txn():
+    data = request.get_json(silent=True) or {}
+    tx_type = (data.get("type") or "").lower()
+    try:
+        amount = float(data.get("amount") or 0)
+    except Exception:
+        amount = 0
+    description = (data.get("description") or "").strip()
+    created_at = (data.get("created_at") or "").strip()
+    category = (data.get("category") or "").strip() or auto_category(tx_type, description)
 
-    cursor.execute(""" SELECT amount AS budget_amount FROM budgets WHERE user id = %s AND category =%s LIMIT 1 """, (user_id, category))
-    budget_row = cursor.fetchone()
+    if tx_type not in ("income","expense") or amount <= 0:
+        return jsonify(success=False, message="Invalid transaction payload"), 400
 
-    warning = None
-    if budget_row:
-        budget_amt = float(budget_row['budget_amount'])
+    if created_at:
+        try:
+            # accept ISO (with/without Z)
+            datetime.fromisoformat(created_at.replace("Z",""))
+        except Exception:
+            created_at = None
 
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO transactions(user_id,type,amount,category,description,created_at) "
+        "VALUES(?,?,?,?,?,COALESCE(?, datetime('now')))",
+        (session["user_id"], tx_type, amount, category, description, created_at)
+    )
+    db.commit()
+    tid = cur.lastrowid
+    row = db.execute("SELECT * FROM transactions WHERE id=?", (tid,)).fetchone()
+    return jsonify(success=True, transaction=dict(row))
 
+# ---- list ----
+@tx_bp.get("/all")
+@login_required
+def list_txns():
+    uid = session["user_id"]
+    start = request.args.get("start_date")
+    end   = request.args.get("end_date")
+    page_size = int(request.args.get("page_size") or 100)
 
-        cursor.execute(""" SELECT COALESCE(SUM(amount), 0) AS total_spent FROM transactions WHERE user_id = %s AND category = %s AND MONTH(created_at) = MONTH(CURDATE()) AND YEAR(created_at) = YEAR(CURDATE()) """, (user_id, category))
-        spent_row = cursor.fetchone()
-        total_spent = float(spent_row['total_spent'])
+    sql = "SELECT * FROM transactions WHERE user_id=?"
+    params = [uid]
+    if start:
+        sql += " AND date(created_at) >= date(?)"
+        params.append(start)
+    if end:
+        sql += " AND date(created_at) <= date(?)"
+        params.append(end)
+    sql += " ORDER BY datetime(created_at) DESC LIMIT ?"
+    params.append(page_size)
 
+    rows = get_db().execute(sql, tuple(params)).fetchall()
+    return jsonify(success=True, transactions=[dict(r) for r in rows])
 
-        if total_spent + amount > budget_amt:
-            warning = (f"You have spent ${total_spent:2f} in '{category}', " f" which exceeds your monthly budget of ${budget_amt:2f}.")
+# ---- update ----
+@tx_bp.patch("/<int:txn_id>")
+@login_required
+def update_txn(txn_id: int):
+    data = request.get_json(silent=True) or {}
+    fields, params = [], []
 
-            cursor.close()
-            conn.close()
+    if "type" in data:
+        t = (data.get("type") or "").lower()
+        if t not in ("income","expense"):
+            return jsonify(success=False, message="Invalid type"), 400
+        fields.append("type=?"); params.append(t)
 
+    if "amount" in data:
+        try:
+            amt = float(data.get("amount")); assert amt > 0
+        except Exception:
+            return jsonify(success=False, message="Invalid amount"), 400
+        fields.append("amount=?"); params.append(amt)
 
-            resp = {"message": "Transaction added successfully"}
-            if warning:
-                resp["warning"] = warning
+    if "description" in data:
+        desc = (data.get("description") or "").strip()
+        fields.append("description=?"); params.append(desc)
+        if "category" not in data and "type" in data:
+            fields.append("category=?"); params.append(auto_category(data["type"], desc))
 
-                return jsonify(resp), 201
+    if "category" in data:
+        cat = (data.get("category") or "").strip() or None
+        fields.append("category=?"); params.append(cat)
 
-def get_transactions():
-    user_id = get_jwt_identity()
-    conn = connect_db()
-    if conn is None:
-        return jsonify({"error": "Database connection failed"}), 500
-    cursor = conn.cursor(dictionary=True)
+    if "created_at" in data and data["created_at"]:
+        fields.append("created_at=?"); params.append(data["created_at"])
 
-    # Fetch recent transactions
-    cursor.execute("""
-        SELECT id, type, category, amount, created_at 
-        FROM transactions 
-        WHERE user_id = %s 
-        ORDER BY created_at DESC 
-        LIMIT 10
-    """, (user_id,))
-    transactions = cursor.fetchall()
+    if not fields:
+        return jsonify(success=False, message="No changes"), 400
 
-    cursor.close()
-    conn.close()
-    return jsonify({"transactions": transactions}), 200
+    params.extend([txn_id, session["user_id"]])
+    db = get_db()
+    db.execute(f"UPDATE transactions SET {', '.join(fields)} WHERE id=? AND user_id=?", tuple(params))
+    db.commit()
+
+    row = db.execute("SELECT * FROM transactions WHERE id=? AND user_id=?", (txn_id, session["user_id"])).fetchone()
+    if not row:
+        return jsonify(success=False, message="Not found"), 404
+    return jsonify(success=True, transaction=dict(row))
+
+# ---- delete ----
+@tx_bp.delete("/<int:txn_id>")
+@login_required
+def delete_txn(txn_id: int):
+    db = get_db()
+    cur = db.execute("DELETE FROM transactions WHERE id=? AND user_id=?", (txn_id, session["user_id"]))
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify(success=False, message="Not found"), 404
+    return jsonify(success=True)
+
+# ---- CSV EXPORT ----
+@tx_bp.get("/export")
+@login_required
+def export_csv():
+    """
+    Export user's transactions within optional date range as CSV.
+    Query params: start_date=YYYY-MM-DD, end_date=YYYY-MM-DD
+    """
+    import csv, io
+    uid = session["user_id"]
+    start = request.args.get("start_date")
+    end   = request.args.get("end_date")
+
+    sql = "SELECT id, type, amount, category, description, created_at FROM transactions WHERE user_id=?"
+    params = [uid]
+    if start:
+        sql += " AND date(created_at) >= date(?)"; params.append(start)
+    if end:
+        sql += " AND date(created_at) <= date(?)"; params.append(end)
+    sql += " ORDER BY datetime(created_at) DESC"
+
+    rows = get_db().execute(sql, tuple(params)).fetchall()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["date","type","amount","category","description"])
+    for r in rows:
+        writer.writerow([
+            (r["created_at"] or "")[:19].replace("T"," "),
+            r["type"],
+            f'{float(r["amount"]):.2f}',
+            r["category"] or "",
+            r["description"] or "",
+        ])
+    csv_data = output.getvalue()
+    output.close()
+
+    fname = f"transactions_{start or 'all'}_{end or 'all'}.csv"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Content-Type": "text/csv; charset=utf-8",
+        "Cache-Control": "no-store",
+    }
+    return Response(csv_data, headers=headers)
+
+# ---- CSV IMPORT ----
+@tx_bp.post("/import")
+@login_required
+def import_csv():
+    """
+    Import CSV of transactions. Accepts:
+      - multipart/form-data with file field named 'file', or
+      - text/csv bytes as raw body.
+    Expected headers (case-insensitive):
+      date|created_at, type, amount, category (optional), description
+    """
+    import csv, io
+
+    payload = None
+    if "file" in request.files:
+        payload = request.files["file"].read()
+    elif request.data:
+        payload = request.data
+    else:
+        return jsonify(success=False, message="No CSV uploaded"), 400
+
+    try:
+        text = payload.decode("utf-8-sig")
+    except Exception:
+        return jsonify(success=False, message="CSV must be UTF-8 encoded"), 400
+
+    f = io.StringIO(text)
+    reader = csv.DictReader(f)
+    if not reader.fieldnames:
+        return jsonify(success=False, message="Missing header row"), 400
+
+    def pick(row, names):
+        for n in names:
+            if n in row and row[n] != "":
+                return row[n]
+        return ""
+
+    created = skipped = 0
+    db = get_db()
+
+    for row in reader:
+        r = { (k or "").strip().lower(): (v or "").strip() for k,v in row.items() }
+
+        date_str = pick(r, ["date","created_at"])
+        tx_type  = (pick(r, ["type"]) or "").lower()
+        amount_s = pick(r, ["amount"])
+        category = pick(r, ["category"])
+        desc     = pick(r, ["description","memo","note"])
+
+        try:
+            amount = float(amount_s)
+        except Exception:
+            skipped += 1; continue
+        if tx_type not in ("income","expense"):
+            skipped += 1; continue
+
+        cat = category or auto_category(tx_type, desc)
+
+        # duplicate guard: same minute + type + amount + description
+        dup = db.execute("""
+            SELECT id FROM transactions
+            WHERE user_id=? AND type=? AND ABS(amount-?)<0.0001
+              AND IFNULL(description,'')=?
+              AND substr(created_at,1,16)=substr(?,1,16)
+            LIMIT 1
+        """, (session["user_id"], tx_type, amount, desc, date_str)).fetchone()
+
+        if dup:
+            skipped += 1
+            continue
+
+        db.execute("""
+            INSERT INTO transactions (user_id, type, amount, category, description, created_at)
+            VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+        """, (session["user_id"], tx_type, amount, cat, desc, date_str))
+        created += 1
+
+    db.commit()
+    return jsonify(success=True, created=created, skipped=skipped)

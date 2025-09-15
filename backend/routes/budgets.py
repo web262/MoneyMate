@@ -1,69 +1,149 @@
-from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from models.database import connect_db
+# backend/routes/budgets.py
+from flask import Blueprint, request, jsonify, session
+from ..database import get_db
+from .auth import login_required
 
-budgets_bp = Blueprint("budgets", __name__)
+# All routes live under /api/budgets/*
+budgets_bp = Blueprint("budgets", __name__, url_prefix="/api/budgets")
 
-@budgets_bp.route("/add", methods=["POST"])
-@jwt_required()
-def add_budget():
-    user_id = get_jwt_identity()
-    data = request.get_json()
-    
-    conn = connect_db()
-    if conn is None:
-        return jsonify({"error": "Database connection failed"}), 500
-    cursor = conn.cursor(dictionary=True)
-    
-    cursor.execute(
-        "INSERT INTO budgets (user_id, category, amount) VALUES (%s, %s, %s)",
-        (user_id, data["category"], data["amount"])
+def ensure_schema():
+    db = get_db()
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS budgets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            monthly_limit REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, category) ON CONFLICT REPLACE,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+    """)
+    db.commit()
+
+@budgets_bp.before_app_request
+def _ensure():
+    ensure_schema()
+
+# ---------- helpers ----------
+def _require_user():
+    uid = session.get("user_id")
+    if not uid:
+        return None, (jsonify(success=False, message="Unauthorized"), 401)
+    return uid, None
+
+# ---------- create (POST /api/budgets/ or /api/budgets/add) ----------
+@budgets_bp.post("/")
+@budgets_bp.post("/add")
+@login_required
+def create_budget():
+    uid, err = _require_user()
+    if err: return err
+
+    data = request.get_json(silent=True) or {}
+    category = (data.get("category") or "").strip()
+    try:
+        limit = float(data.get("monthly_limit"))
+    except Exception:
+        limit = -1
+
+    if not category or limit <= 0:
+        return jsonify(success=False, message="Provide category and positive monthly_limit"), 400
+
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO budgets (user_id, category, monthly_limit) VALUES (?,?,?)",
+        (uid, category, limit),
     )
-    conn.commit()
-    return jsonify({"message": "Budget added successfully"}), 201
+    db.commit()
+    bid = cur.lastrowid
+    row = db.execute("SELECT id, category, monthly_limit, created_at FROM budgets WHERE id=?", (bid,)).fetchone()
+    return jsonify(success=True, budget=dict(row)), 201
 
-@budgets_bp.route("/all", methods=["GET"])
-@jwt_required()
-def get_all_budgets():
-    user_id = get_jwt_identity()
-    
-    conn = connect_db()
-    if conn is None:
-        return jsonify({"error": "Database connection failed"}), 500
-    cursor = conn.cursor(dictionary=True)
-    
-    cursor.execute("SELECT * FROM budgets WHERE user_id = %s", (user_id,))
-    budgets = cursor.fetchall()
-    return jsonify(budgets), 200
+# ---------- list with MTD usage (GET /api/budgets/all) ----------
+@budgets_bp.get("/all")
+@login_required
+def list_budgets():
+    uid, err = _require_user()
+    if err: return err
 
-@budgets_bp.route("/update/<int:id>", methods=["PUT"])
-@jwt_required()
-def update_budget(id):
-    user_id = get_jwt_identity()
-    data = request.get_json()
-    
-    conn = connect_db()
-    if conn is None:
-        return jsonify({"error": "Database connection failed"}), 500
-    cursor = conn.cursor(dictionary=True)
-    
-    cursor.execute(
-        "UPDATE budgets SET category = %s, amount = %s WHERE id = %s AND user_id = %s",
-        (data["category"], data["amount"], id, user_id)
-    )
-    conn.commit()
-    return jsonify({"message": "Budget updated successfully"}), 200
+    db = get_db()
+    rows = db.execute("""
+        SELECT
+          b.id, b.category, b.monthly_limit, b.created_at,
+          IFNULL((
+            SELECT SUM(t.amount) FROM transactions t
+            WHERE t.user_id = b.user_id
+              AND t.type = 'expense'
+              AND t.category = b.category
+              AND strftime('%Y-%m', t.created_at) = strftime('%Y-%m','now')
+          ), 0) AS spent_mtd
+        FROM budgets b
+        WHERE b.user_id = ?
+        ORDER BY lower(b.category)
+    """, (uid,)).fetchall()
 
-@budgets_bp.route("/delete/<int:id>", methods=["DELETE"])
-@jwt_required()
-def delete_budget(id):
-    user_id = get_jwt_identity()
-    
-    conn = connect_db()
-    if conn is None:
-        return jsonify({"error": "Database connection failed"}), 500
-    cursor = conn.cursor(dictionary=True)
-    
-    cursor.execute("DELETE FROM budgets WHERE id = %s AND user_id = %s", (id, user_id))
-    conn.commit()
-    return jsonify({"message": "Budget deleted successfully"}), 200
+    items = []
+    for r in rows:
+        limit = float(r["monthly_limit"])
+        spent = float(r["spent_mtd"])
+        used_ratio = (spent / limit) if limit > 0 else 0.0
+        items.append({
+            "id": r["id"],
+            "category": r["category"],
+            "monthly_limit": limit,
+            "spent_mtd": spent,
+            "used_ratio": round(used_ratio, 4),
+            "created_at": r["created_at"],
+        })
+    return jsonify(success=True, budgets=items)
+
+# ---------- update (PATCH /api/budgets/<id>) ----------
+@budgets_bp.patch("/<int:bid>")
+@login_required
+def update_budget(bid: int):
+    uid, err = _require_user()
+    if err: return err
+
+    data = request.get_json(silent=True) or {}
+    fields, params = [], []
+
+    if "category" in data:
+        cat = (data.get("category") or "").strip()
+        if not cat:
+            return jsonify(success=False, message="Category cannot be empty"), 400
+        fields.append("category=?"); params.append(cat)
+
+    if "monthly_limit" in data:
+        try:
+            lim = float(data.get("monthly_limit")); assert lim > 0
+        except Exception:
+            return jsonify(success=False, message="monthly_limit must be > 0"), 400
+        fields.append("monthly_limit=?"); params.append(lim)
+
+    if not fields:
+        return jsonify(success=False, message="No changes"), 400
+
+    params.extend([bid, uid])
+    db = get_db()
+    db.execute(f"UPDATE budgets SET {', '.join(fields)} WHERE id=? AND user_id=?", tuple(params))
+    db.commit()
+
+    row = db.execute("SELECT id, category, monthly_limit, created_at FROM budgets WHERE id=? AND user_id=?",
+                     (bid, uid)).fetchone()
+    if not row:
+        return jsonify(success=False, message="Not found"), 404
+    return jsonify(success=True, budget=dict(row))
+
+# ---------- delete (DELETE /api/budgets/<id>) ----------
+@budgets_bp.delete("/<int:bid>")
+@login_required
+def delete_budget(bid: int):
+    uid, err = _require_user()
+    if err: return err
+    db = get_db()
+    cur = db.execute("DELETE FROM budgets WHERE id=? AND user_id=?", (bid, uid))
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify(success=False, message="Not found"), 404
+    return jsonify(success=True)
