@@ -5,22 +5,25 @@ on:
     branches: [ main ]
     paths:
       - 'frontend/**'
-      - '!**.md'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -33,12 +36,29 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Build
-        env:
-          # Make sure .env.production is committed in frontend/ with your Render URL
-          REACT_APP_API_BASE_URL: ${{ secrets.REACT_APP_API_BASE_URL || '' }}
+      - name: Build React app
+        # If you didn't commit frontend/.env.production, you can inject a secret here:
+        # env:
+        #   REACT_APP_API_BASE_URL: ${{ secrets.REACT_APP_API_BASE_URL }}
         run: npm run build
 
-      # Publish the compiled app in frontend/build to the gh-pages branch
-      - name: Deploy to gh-pages
-        run: npx gh-pages -d build -u "github-actions-bot <actions@github.com>"
+      - name: Setup Pages (auto-enable)
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/build
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
