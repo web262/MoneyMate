@@ -3,10 +3,14 @@ from flask import Blueprint, request, jsonify, session
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from functools import wraps
-import re, secrets, os
+import re, secrets, os, jwt
 
 from ..database import get_db
 from ..utils.mailer import send_email, build_reset_email
+
+# ─────────────────── Config ───────────────────
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret")
+JWT_EXP_HOURS = int(os.getenv("JWT_EXP_HOURS", 12))
 
 # ─────────────────── session guard ───────────────────
 def login_required(fn):
@@ -17,9 +21,7 @@ def login_required(fn):
         return fn(*args, **kwargs)
     return wrapper
 
-# All routes under /api/auth/*
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
-
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # ─────────────────── schema ───────────────────
@@ -53,16 +55,11 @@ def before_any():
 
 # ─────────────────── helpers ───────────────────
 def _get_payload():
-    """
-    Support JSON and form submissions; normalize common field names.
-    Returns: (name, email, password, confirm)
-    """
     if request.is_json:
         data = request.get_json(silent=True) or {}
     else:
         data = request.form.to_dict(flat=True)
 
-    # Normalize keys (accept 'full_name' too)
     name = (
         data.get("name")
         or data.get("fullName")
@@ -76,14 +73,20 @@ def _get_payload():
     return name, email, password, confirm
 
 def valid_password(p: str) -> bool:
-    # IB-friendly: at least 6 chars
     return bool(p) and len(p) >= 6
+
+def generate_jwt(user_id, email):
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXP_HOURS)
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 # ─────────────────── Register ───────────────────
 @auth_bp.post("/register")
 def register():
     name, email, password, confirm = _get_payload()
-
     if not name:
         return jsonify(success=False, message="Name is required"), 400
     if not EMAIL_RE.match(email):
@@ -103,8 +106,6 @@ def register():
         (name, email, generate_password_hash(password)),
     )
     db.commit()
-
-    # Do not auto-login
     return jsonify(success=True, message="Account created. Please sign in."), 201
 
 # ─────────────────── Login / Logout / Me ───────────────────
@@ -121,7 +122,13 @@ def login():
         return jsonify(success=False, message="Invalid email or password"), 401
 
     session["user_id"] = row["id"]
-    return jsonify(success=True, user={"id": row["id"], "name": row["name"], "email": row["email"]})
+    token = generate_jwt(row["id"], row["email"])
+
+    return jsonify(
+        success=True,
+        access_token=token,
+        user={"id": row["id"], "name": row["name"], "email": row["email"]}
+    )
 
 @auth_bp.post("/logout")
 def logout():
@@ -136,7 +143,7 @@ def me():
     r = get_db().execute("SELECT id, name, email FROM users WHERE id=?", (uid,)).fetchone()
     return jsonify(success=True, data=dict(r) if r else None)
 
-# ─────────────────── Change password (logged-in) ───────────────────
+# ─────────────────── Change password ───────────────────
 @auth_bp.post("/change-password")
 def change_password():
     uid = session.get("user_id")
@@ -162,13 +169,12 @@ def change_password():
     db.commit()
     return jsonify(success=True, message="Password changed")
 
-# ─────────────────── Forgot password: start ───────────────────
+# ─────────────────── Forgot password ───────────────────
 @auth_bp.post("/forgot-start")
 def forgot_start():
     data = request.get_json(silent=True) or request.form.to_dict(flat=True) or {}
     email = (data.get("email") or "").strip().lower()
     if not EMAIL_RE.match(email):
-        # Do not leak user existence
         return jsonify(success=True)
 
     db = get_db()
@@ -188,13 +194,10 @@ def forgot_start():
     link = f"{front}/reset.html?token={token}"
     app_name = os.getenv("APP_NAME", "MoneyMate")
 
-    # Build Gmail-friendly HTML + plain text and send
     html, text = build_reset_email(u["name"], link, app_name)
     send_email(email, f"{app_name} – Reset your password", html, text)
-
     return jsonify(success=True)
 
-# ─────────────────── Forgot password: complete ───────────────────
 @auth_bp.post("/forgot-complete")
 def forgot_complete():
     data = request.get_json(silent=True) or request.form.to_dict(flat=True) or {}
