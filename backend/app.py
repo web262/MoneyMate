@@ -1,31 +1,50 @@
 # backend/app.py
 import os
 from pathlib import Path
-from flask import Flask, send_from_directory
+from flask import Flask, jsonify
 from dotenv import load_dotenv
+from flask_cors import CORS
 
-# ── Load .env BEFORE importing routes/mailer ─────────────────────────────
+# ── Load .env BEFORE importing blueprints ────────────────────────────────
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
 BASE_DIR = Path(__file__).resolve().parent
+
+# If you ever want to serve local static files, you can point FRONTEND_DIR there,
+# but for GitHub Pages hosting we won't serve frontend from the backend.
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
 
-def create_app():
-    app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="/")
+
+def create_app() -> Flask:
+    app = Flask(__name__)
+
+    # ── Core config ───────────────────────────────────────────────────────
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me"),
         SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE="Lax",
-        # SESSION_COOKIE_SECURE=True,  # enable when serving over HTTPS
+        SESSION_COOKIE_SAMESITE="Lax",   # keep Lax since we are not using cookie auth cross-site
+        JSON_SORT_KEYS=False,
     )
 
-    # DB init
+    # ── CORS: allow ONLY your GitHub Pages origins ───────────────────────
+    # IMPORTANT: Change <your-username> and <repo> to your actual values.
+    # From your screenshot the username is: SoftwareEngineeer
+    allowed_origins = [
+        "https://SoftwareEngineeer.github.io",
+        "https://SoftwareEngineeer.github.io/MoneyMate",
+    ]
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": allowed_origins}},
+        supports_credentials=True,  # safe even if you use header JWTs; required for cookie auth
+    )
+
+    # ── DB init ───────────────────────────────────────────────────────────
     from .database import init_app as init_db
     init_db(app)
 
-    # ── Import blueprints AFTER env is loaded ────────────────────────────
-    # Each blueprint defines its own url_prefix internally
+    # ── Blueprints (each has its own url_prefix like /api/auth, /api/tx, ...) ─
     from .routes.auth import auth_bp                # /api/auth
     from .routes.transactions import tx_bp          # /api/transactions
     from .routes.budgets import budgets_bp          # /api/budgets
@@ -34,7 +53,6 @@ def create_app():
     from .routes.settings import settings_bp        # /api/settings
     from .routes.notifications import notifications_bp  # /api/notifications
 
-    # ── Register blueprints (no double-prefixing) ────────────────────────
     app.register_blueprint(auth_bp)
     app.register_blueprint(tx_bp)
     app.register_blueprint(budgets_bp)
@@ -43,14 +61,28 @@ def create_app():
     app.register_blueprint(settings_bp)
     app.register_blueprint(notifications_bp)
 
-    # ── Static / frontend ────────────────────────────────────────────────
-    @app.route("/", methods=["GET"])
-    def root():
-        return send_from_directory(str(FRONTEND_DIR), "index.html")
+    # ── Health/diagnostics endpoints ──────────────────────────────────────
+    @app.get("/api/health")
+    def health():
+        return jsonify({"ok": True})
 
-    @app.route("/<path:path>", methods=["GET"])
-    def static_proxy(path: str):
-        return send_from_directory(str(FRONTEND_DIR), path)
+    # Optional: a simple root so opening the Render URL in a browser shows something
+    @app.get("/")
+    def index():
+        return jsonify({
+            "service": "MoneyMate API",
+            "docs": "/api/health",
+            "frontend": "https://SoftwareEngineeer.github.io/MoneyMate"
+        })
+
+    # ── Error handlers (JSON) ─────────────────────────────────────────────
+    @app.errorhandler(404)
+    def not_found(e):
+        return jsonify({"error": "Not found"}), 404
+
+    @app.errorhandler(500)
+    def server_error(e):
+        return jsonify({"error": "Internal server error"}), 500
 
     # Helpful sanity print (no secrets)
     print("\n[env] SMTP_HOST:", os.getenv("SMTP_HOST"))
@@ -59,7 +91,10 @@ def create_app():
 
     return app
 
+
+# For local 'python backend/app.py' runs only
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Local dev server; Render will use Gunicorn via wsgi.py
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
