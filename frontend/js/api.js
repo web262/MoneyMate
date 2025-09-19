@@ -1,80 +1,155 @@
-// frontend/js/api.js  — universal API helper for static frontend + Render backend
-const API_BASE = 'https://moneymate-1-30px.onrender.com'; // Render base URL
-const TOKEN_KEY = 'mm_jwt';
+// frontend/js/api.js — universal API helper for static frontend + Render backend
 
-// ----- token storage helpers -------------------------------------------------
+// ====== BASE URL ======
+// If you ever need to override this at runtime, you can set either:
+//   window.MM_API_BASE = "https://your-other-service.onrender.com/api"
+// or add in <head>: <meta name="mm-api-base" content="https://.../api">
+const META_BASE =
+  (typeof document !== "undefined" &&
+    document.querySelector('meta[name="mm-api-base"]')?.content) || null;
+
+const RUNTIME_BASE =
+  (typeof window !== "undefined" && window.MM_API_BASE) || null;
+
+// 👉 Your live Render backend (with trailing /api)
+const DEFAULT_BASE = "https://moneymate-ac0q.onrender.com/api";
+
+// Final base (runtime override > meta tag > default)
+export const API_BASE = (RUNTIME_BASE || META_BASE || DEFAULT_BASE).replace(
+  /\/+$/,
+  ""
+);
+
+// ====== TOKEN STORAGE ======
+const TOKEN_KEY = "mm_jwt";
+
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
 }
+
 export function setToken(token, { remember = false } = {}) {
+  // keep exactly one copy (either localStorage or sessionStorage)
   localStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(TOKEN_KEY);
-  const store = remember ? localStorage : sessionStorage;
-  if (token) store.setItem(TOKEN_KEY, token);
+  if (token) {
+    (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
+  }
 }
+
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(TOKEN_KEY);
 }
 
-// ----- args resolver: supports both (path, method, body) and (path, opts) ----
-function resolveArgs(methodOrOpts, body) {
-  if (typeof methodOrOpts === 'string') {
-    return { method: methodOrOpts || 'GET', body };
-  }
-  // object style
-  return methodOrOpts || { method: 'GET' };
+// ====== INTERNALS ======
+function normalizeUrl(path) {
+  if (!path) return API_BASE;
+  if (/^https?:\/\//i.test(path)) return path; // already absolute
+  return `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
-// ----- core request ----------------------------------------------------------
-export async function api(path, methodOrOpts = 'GET', maybeBody = null) {
-  const { method = 'GET', body, headers = {} } = resolveArgs(methodOrOpts, maybeBody);
+function resolveArgs(methodOrOpts, body) {
+  if (typeof methodOrOpts === "string") {
+    return { method: methodOrOpts || "GET", body };
+  }
+  // object style: api("/x", { method, headers, body, ... })
+  return methodOrOpts || { method: "GET" };
+}
+
+// ====== CORE REQUEST ======
+export async function api(path, methodOrOpts = "GET", maybeBody = null) {
+  const { method = "GET", body, headers = {}, timeoutMs = 20000, ...rest } =
+    resolveArgs(methodOrOpts, maybeBody);
+
   const token = getToken();
+  const url = normalizeUrl(path);
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  // Timeout support (AbortController)
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(new DOMException("timeout", "AbortError")), timeoutMs);
 
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      mode: "cors",
+      credentials: "omit", // JWT is in header; no cookies needed
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+      body: body != null ? JSON.stringify(body) : undefined,
+      signal: ac.signal,
+      ...rest,
+    });
+  } catch (err) {
+    clearTimeout(t);
+    // Network/timeout errors
+    if (err?.name === "AbortError") {
+      throw new Error("Network timeout. Please try again.");
+    }
+    throw new Error("Network error. Check your connection and try again.");
+  } finally {
+    clearTimeout(t);
+  }
+
+  // Try to parse JSON; fall back to text
   let data = null;
-  try { data = await res.json(); } catch (_) {}
+  let text = "";
+  const ct = res.headers.get("content-type") || "";
+  try {
+    if (ct.includes("application/json")) {
+      data = await res.json();
+    } else {
+      text = await res.text();
+    }
+  } catch (_) {
+    // ignore parse errors
+  }
 
   if (!res.ok) {
-    const msg = (data && (data.error || data.message)) || `Request failed (${res.status})`;
+    // Auto-clear token on unauthorized
+    if (res.status === 401) clearToken();
+
+    const msg =
+      (data && (data.error || data.message)) ||
+      text ||
+      `Request failed (${res.status})`;
     throw new Error(msg);
   }
-  return data;
+
+  return data ?? (text ? { ok: true, text } : { ok: true });
 }
 
-// ----- convenience helpers ---------------------------------------------------
-export const getJSON  = (path)        => api(path, 'GET');
-export const postJSON = (path, body)  => api(path, 'POST', body);
-export const putJSON  = (path, body)  => api(path, 'PUT', body);
-export const delJSON  = (path)        => api(path, 'DELETE');
+// ====== CONVENIENCE HELPERS ======
+export const getJSON  = (path)       => api(path, "GET");
+export const postJSON = (path, body) => api(path, "POST", body);
+export const putJSON  = (path, body) => api(path, "PUT", body);
+export const delJSON  = (path)       => api(path, "DELETE");
 
-// Auth flows (adjust endpoints if your backend differs)
+// ====== AUTH HELPERS ======
+// NOTE: backend routes assumed as /api/auth/...
 export async function login(email, password) {
-  const data = await postJSON('/api/auth/login', { email, password });
-  const token = data?.access_token || data?.token || data?.jwt || data?.accessToken;
-  if (!token) throw new Error('No token returned by server.');
+  const data = await postJSON("/auth/login", { email, password });
+  const token =
+    data?.access_token || data?.token || data?.jwt || data?.accessToken;
+  if (!token) throw new Error("No token returned by server.");
   return { token, user: data.user ?? null, raw: data };
 }
 
 export async function registerAccount(payload) {
-  // expected payload: { name, email, password }
-  return await postJSON('/api/auth/register', payload);
+  // expected payload: { name, email, password } (adjust if your API differs)
+  return await postJSON("/auth/register", payload);
 }
 
 export function logout() {
   clearToken();
 }
 
-// Expose for legacy non-module pages: window.api('/path','POST',{...})
-// and window.MMAuth helpers.
-window.api      = api;
-window.MMAuth   = { getToken, setToken, clearToken, login, registerAccount };
+// ====== GLOBAL FALLBACKS (for non-module pages) ======
+if (typeof window !== "undefined") {
+  window.api = api;
+  window.MMAuth = { getToken, setToken, clearToken, login, registerAccount };
+  window.MM_API_BASE = API_BASE; // read-only exposure for debugging
+}
