@@ -1,31 +1,34 @@
 // frontend/js/register.js
-(() => {
-  const form    = document.getElementById('signup-form');
-  const btn     = document.getElementById('submitBtn');
-  const toastEl = document.getElementById('toast');
-  const toastMsg= document.getElementById('toastMsg');
+// Use the shared API helper so requests hit your Render backend.
+import { registerAccount } from './api.js';
 
-  if (!form) return; // page doesn't have the signup form
+(() => {
+  const form     = document.getElementById('signup-form');
+  const btn      = document.getElementById('submitBtn');
+  const toastEl  = document.getElementById('toast');
+  const toastMsg = document.getElementById('toastMsg');
+
+  if (!form) return; // not on the register page
 
   const toast = toastEl ? new bootstrap.Toast(toastEl, { delay: 3000 }) : null;
   const showError = (msg) => {
     if (toastMsg) toastMsg.textContent = msg || 'Registration failed.';
-    if (toast) toast.show();
-    else alert(msg || 'Registration failed.');
+    if (toast) toast.show(); else alert(msg || 'Registration failed.');
   };
 
-  // live password match validation
+  // --- live password match validation ---------------------------------------
   const pwdEl = document.getElementById('password');
   const cfmEl = document.getElementById('confirm');
   const validateMatch = () => {
     if (!pwdEl || !cfmEl) return;
     cfmEl.setCustomValidity(pwdEl.value !== cfmEl.value ? 'Passwords do not match' : '');
   };
-  ['password','confirm'].forEach(id => {
+  ['password', 'confirm'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', validateMatch);
   });
 
+  // --- submit ---------------------------------------------------------------
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     validateMatch();
@@ -46,43 +49,33 @@
     }
 
     try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        // IMPORTANT: map full_name -> name for the backend
-        body: JSON.stringify({
-          name: full_name,
-          email,
-          password,
-          confirmPassword: confirm // optional; backend validates if present
-        })
-      });
+      // Map full_name -> name for the backend. confirm is only for client-side match.
+      const data = await registerAccount({ name: full_name, email, password });
 
-      const data = await res.json().catch(() => ({}));
-
-      if (res.ok && data?.success) {
-        // no auto-login; go to login page with flag
-        window.location.href = 'login.html?registered=1';
-        return;
+      // If your backend returns {success:true} (optional check)
+      if (data?.success === false) {
+        throw new Error(data?.message || 'Registration failed');
       }
 
-      // restore button
-      if (btn) {
-        btn.disabled = false;
-        btn.innerHTML = `<i class="fa-solid fa-user-check me-2"></i> Create account`;
-      }
-
-      // friendly error mapping
-      if (res.status === 409) return showError('Email already registered.');
-      if (res.status === 400) return showError(data?.message || 'Invalid data. Please check inputs.');
-      return showError(data?.message || `Request failed (${res.status})`);
+      // Success → send user to Login
+      window.location.href = 'login.html?registered=1';
+      return;
     } catch (err) {
+      // Friendly error mapping where possible
+      const msg = (err && err.message) || 'Registration failed';
+      if (/409/.test(msg) || /already/i.test(msg)) {
+        showError('Email already registered.');
+      } else if (/400/.test(msg) || /invalid/i.test(msg)) {
+        showError('Invalid data. Please check your inputs.');
+      } else {
+        showError(msg);
+      }
+    } finally {
+      // Restore button
       if (btn) {
         btn.disabled = false;
         btn.innerHTML = `<i class="fa-solid fa-user-check me-2"></i> Create account`;
       }
-      showError('Network error. Please try again.');
     }
   });
 })();
