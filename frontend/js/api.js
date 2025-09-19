@@ -1,7 +1,10 @@
+// frontend/src/api.js
+const BASE_URL = process.env.REACT_APP_API_BASE_URL || "";
+
 export async function api(path, method = "GET", body = null) {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${BASE_URL}/api${path}`, {
     method,
-    credentials: "include",
+    credentials: "include", // keep if you use cookie-based auth
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : null,
   });
