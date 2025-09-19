@@ -3,4 +3,4 @@ flask-cors
 flask-jwt-extended
 sqlalchemy
 python-dotenv
-gunicorn
+gunicorn==23.0.0
