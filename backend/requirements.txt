@@ -4,4 +4,3 @@ flask-jwt-extended
 sqlalchemy
 python-dotenv
 gunicorn
-psycopg2-binary
