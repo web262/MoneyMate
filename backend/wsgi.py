@@ -1,4 +1,4 @@
 # backend/wsgi.py
-from app import create_app
+from .app import create_app  # <-- relative import because we're in the 'backend' package
 
-app = create_app()  # Gunicorn will look for "app"
+app = create_app()
