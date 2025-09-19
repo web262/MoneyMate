@@ -4,7 +4,10 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'frontend/**'
+      - 'src/**'
+      - 'public/**'
+      - 'package.json'
+      - '.github/workflows/gh-pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -19,9 +22,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,26 +31,25 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm ci
 
       - name: Build React app
-        # If you didn't commit frontend/.env.production, you can inject a secret here:
-        # env:
-        #   REACT_APP_API_BASE_URL: ${{ secrets.REACT_APP_API_BASE_URL }}
+        env:
+          REACT_APP_API_BASE_URL: https://moneymate-1-30px.onrender.com
         run: npm run build
 
-      - name: Setup Pages (auto-enable)
+      - name: Setup Pages
         uses: actions/configure-pages@v5
         with:
           enablement: true
 
-      - name: Upload artifact
+      - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: frontend/build
+          path: build
 
   deploy:
     environment:
