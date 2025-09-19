@@ -1,4 +1,4 @@
-name: Deploy Frontend to GitHub Pages
+name: Deploy static frontend to GitHub Pages
 
 on:
   push:
@@ -24,35 +24,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      # Install packages from frontend/package.json
-      - name: Install deps
-        working-directory: frontend
-        run: npm ci
-
-      # Build the Vite app (outputs to frontend/dist)
-      - name: Build
-        working-directory: frontend
-        env:
-          # If you committed frontend/.env.production you can remove this line.
-          REACT_APP_API_BASE_URL: https://moneymate-1-30px.onrender.com
-        run: npm run build
-
-      # Enable Pages for this repo automatically
-      - name: Setup Pages (auto-enable)
+      # Enable Pages for this repo (if not already)
+      - name: Setup Pages
         uses: actions/configure-pages@v5
         with:
           enablement: true
 
-      # Upload the built site (Vite builds to 'dist')
-      - name: Upload artifact
+      # Upload your static files directly from /frontend
+      - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: frontend/dist
+          path: frontend
 
   deploy:
     environment:
