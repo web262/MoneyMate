@@ -23,17 +23,20 @@ def create_app() -> Flask:
 
     # ---- CORS (GitHub Pages origin only; no path; lowercase) ---------------
     # Prefer setting this via env in Render: ALLOWED_ORIGINS=https://softwareengineeer.github.io
-    allowed_origins = os.environ.get("ALLOWED_ORIGINS", "https://softwareengineeer.github.io")
-    # support comma-separated list
-    allowed = [o.strip().lower() for o in allowed_origins.split(",") if o.strip()]
+    allowed_origins = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "https://web262.github.io,https://softwareengineeer.github.io"  # allow both if needed
+)
 
-    CORS(
-        app,
-        resources={r"/api/*": {"origins": allowed}},
-        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization"],
-        supports_credentials=True,  # ok even if you use Authorization header
-    )
+allowed = [o.strip().lower() for o in allowed_origins.split(",") if o.strip()]
+
+CORS(
+    app,
+    resources={r"/api/*": {"origins": allowed}},
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+    supports_credentials=True,
+)
     # ------------------------------------------------------------------------
 
     # DB init
