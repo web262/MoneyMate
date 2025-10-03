@@ -1,29 +1,46 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>MoneyMate — Dashboard</title>
+
+  <!-- Point the frontend to your new Render API (must come BEFORE api.js) -->
+  <meta name="mm-api-base" content="https://moneymate-2.onrender.com/api">
+
   <link rel="icon" href="images/favicon-32x32.png" type="image/png" />
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet"/>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet"/>
+
   <style>
-    :root{--mm-bg:#0b1220;--mm-card:#101827cc;--mm-border:rgba(255,255,255,.08);--mm-text:#dbe7f3;--mm-muted:#9fb3c8;--mm-accent:#22c55e;}
-    body{background:radial-gradient(900px 640px at 0% -10%, rgba(34,197,94,.12), transparent 40%),
-                     radial-gradient(1100px 720px at 100% -20%, rgba(16,185,129,.10), transparent 50%),
-                     var(--mm-bg);
-         color:var(--mm-text);font-family:"Montserrat",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    :root{
+      --mm-bg:#0b1220;--mm-card:#101827cc;--mm-border:rgba(255,255,255,.08);
+      --mm-text:#dbe7f3;--mm-muted:#9fb3c8;--mm-accent:#22c55e;
+    }
+    body{
+      background:
+        radial-gradient(900px 640px at 0% -10%, rgba(34,197,94,.12), transparent 40%),
+        radial-gradient(1100px 720px at 100% -20%, rgba(16,185,129,.10), transparent 50%),
+        var(--mm-bg);
+      color:var(--mm-text);
+      font-family:"Montserrat",system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif
+    }
     .glass{background:var(--mm-card);border:1px solid var(--mm-border);border-radius:20px;backdrop-filter:blur(10px);box-shadow:0 20px 40px rgba(2,6,23,.35);}
-    .muted{color:var(--mm-muted)} .btn-mm{background:var(--mm-accent);border-color:var(--mm-accent);color:#06110b;}
+    .muted{color:var(--mm-muted)}
+    .btn-mm{background:var(--mm-accent);border-color:var(--mm-accent);color:#06110b;}
     .navbar{backdrop-filter: blur(10px); background: rgba(16,24,39,.6)!important; border-bottom:1px solid var(--mm-border)}
-    .navbar .navbar-brand span{color:var(--mm-accent)} .progress{height:10px}
+    .navbar .navbar-brand span{color:var(--mm-accent)}
+    .progress{height:10px}
   </style>
 </head>
 <body>
 <nav class="navbar navbar-dark navbar-expand-lg">
   <div class="container-xxl">
     <a class="navbar-brand fw-bold" href="index.html">Money<span>Mate</span></a>
-    <button class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#nav"><span class="navbar-toggler-icon"></span></button>
+    <button class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#nav">
+      <span class="navbar-toggler-icon"></span>
+    </button>
     <div id="nav" class="collapse navbar-collapse">
       <ul class="navbar-nav me-auto">
         <li class="nav-item"><a class="nav-link active" href="dashboard.html">Dashboard</a></li>
@@ -31,7 +48,6 @@
         <li class="nav-item"><a class="nav-link" href="transactions.html">Transactions</a></li>
         <li class="nav-item"><a class="nav-link" href="goals.html">Goals</a></li>
         <li class="nav-item"><a class="nav-link" href="settings.html">Settings</a></li>
-
       </ul>
 
       <div class="dropdown me-3">
@@ -60,7 +76,9 @@
     <input type="date" id="startDate" class="form-control form-control-sm w-auto d-none">
     <span class="d-none" id="toLabel">to</span>
     <input type="date" id="endDate" class="form-control form-control-sm w-auto d-none">
-    <button class="btn btn-mm ms-auto" data-bs-toggle="modal" data-bs-target="#txModal"><i class="fa-solid fa-plus me-2"></i>Add Transaction</button>
+    <button class="btn btn-mm ms-auto" data-bs-toggle="modal" data-bs-target="#txModal">
+      <i class="fa-solid fa-plus me-2"></i>Add Transaction
+    </button>
   </div>
 
   <!-- Summary cards -->
@@ -122,7 +140,9 @@
       <div class="glass p-3">
         <div class="d-flex justify-content-between align-items-center">
           <h5 class="mb-0">Goals</h5>
-          <button class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#goalModal"><i class="fa-solid fa-plus"></i></button>
+          <button class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#goalModal">
+            <i class="fa-solid fa-plus"></i>
+          </button>
         </div>
         <div id="goalsList" class="mt-3"></div>
       </div>
@@ -218,15 +238,22 @@
 </div>
 
 <div class="toast-container position-fixed top-0 end-0 p-3">
-  <div id="toast" class="toast text-bg-dark border-0" role="alert"><div class="d-flex">
-    <div class="toast-body" id="toastMsg">Done.</div>
-    <button class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
-  </div></div>
+  <div id="toast" class="toast text-bg-dark border-0" role="alert">
+    <div class="d-flex">
+      <div class="toast-body" id="toastMsg">Done.</div>
+      <button class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<!-- Protect the page FIRST -->
+<script type="module" src="js/auth-guard.js"></script>
+<!-- Shared API (adds Authorization automatically) -->
 <script type="module" src="js/api.js"></script>
+<!-- Page logic -->
 <script type="module" src="js/dashboard.js"></script>
 </body>
 </html>
