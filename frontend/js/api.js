@@ -1,9 +1,9 @@
 // frontend/js/api.js — universal API helper for static frontend + Render backend
 
 // ====== BASE URL ======
-// If you ever need to override this at runtime, you can set either:
-//   window.MM_API_BASE = "https://your-other-service.onrender.com/api"
-// or add in <head>: <meta name="mm-api-base" content="https://.../api">
+// You can override at runtime with:
+//   window.MM_API_BASE = "https://moneymate-2.onrender.com/api"
+// or set a meta tag: <meta name="mm-api-base" content="https://.../api">
 const META_BASE =
   (typeof document !== "undefined" &&
     document.querySelector('meta[name="mm-api-base"]')?.content) || null;
@@ -11,15 +11,10 @@ const META_BASE =
 const RUNTIME_BASE =
   (typeof window !== "undefined" && window.MM_API_BASE) || null;
 
-// 👉 Your live Render backend (with trailing /api)
+// Live Render backend (with trailing /api)
 const DEFAULT_BASE = "https://moneymate-2.onrender.com/api";
 
-
-// Final base (runtime override > meta tag > default)
-export const API_BASE = (RUNTIME_BASE || META_BASE || DEFAULT_BASE).replace(
-  /\/+$/,
-  ""
-);
+export const API_BASE = (RUNTIME_BASE || META_BASE || DEFAULT_BASE).replace(/\/+$/, "");
 
 // ====== TOKEN STORAGE ======
 const TOKEN_KEY = "mm_jwt";
@@ -65,7 +60,7 @@ export async function api(path, methodOrOpts = "GET", maybeBody = null) {
   const token = getToken();
   const url = normalizeUrl(path);
 
-  // Timeout support (AbortController)
+  // Timeout support
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(new DOMException("timeout", "AbortError")), timeoutMs);
 
@@ -74,7 +69,7 @@ export async function api(path, methodOrOpts = "GET", maybeBody = null) {
     res = await fetch(url, {
       method,
       mode: "cors",
-      credentials: "omit", // JWT is in header; no cookies needed
+      credentials: "omit", // JWT in header; no cookies
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -86,33 +81,23 @@ export async function api(path, methodOrOpts = "GET", maybeBody = null) {
     });
   } catch (err) {
     clearTimeout(t);
-    // Network/timeout errors
-    if (err?.name === "AbortError") {
-      throw new Error("Network timeout. Please try again.");
-    }
+    if (err?.name === "AbortError") throw new Error("Network timeout. Please try again.");
     throw new Error("Network error. Check your connection and try again.");
   } finally {
     clearTimeout(t);
   }
 
-  // Try to parse JSON; fall back to text
+  // Parse response
   let data = null;
   let text = "";
   const ct = res.headers.get("content-type") || "";
   try {
-    if (ct.includes("application/json")) {
-      data = await res.json();
-    } else {
-      text = await res.text();
-    }
-  } catch (_) {
-    // ignore parse errors
-  }
+    if (ct.includes("application/json")) data = await res.json();
+    else text = await res.text();
+  } catch (_) {}
 
   if (!res.ok) {
-    // Auto-clear token on unauthorized
     if (res.status === 401) clearToken();
-
     const msg =
       (data && (data.error || data.message)) ||
       text ||
@@ -129,10 +114,9 @@ export const postJSON = (path, body) => api(path, "POST", body);
 export const putJSON  = (path, body) => api(path, "PUT", body);
 export const delJSON  = (path)       => api(path, "DELETE");
 
-// ====== AUTH HELPERS ======
-// NOTE: backend routes assumed as /api/auth/...
+// ====== AUTH HELPERS (note the trailing slashes) ======
 export async function login(email, password) {
-  const data = await postJSON("/auth/login", { email, password });
+  const data = await postJSON("/auth/login/", { email, password });
   const token =
     data?.access_token || data?.token || data?.jwt || data?.accessToken;
   if (!token) throw new Error("No token returned by server.");
@@ -140,8 +124,8 @@ export async function login(email, password) {
 }
 
 export async function registerAccount(payload) {
-  // expected payload: { name, email, password } (adjust if your API differs)
-  return await postJSON("/auth/register", payload);
+  // expected payload: { name, email, password }
+  return await postJSON("/auth/register/", payload);
 }
 
 export function logout() {
@@ -151,6 +135,6 @@ export function logout() {
 // ====== GLOBAL FALLBACKS (for non-module pages) ======
 if (typeof window !== "undefined") {
   window.api = api;
-  window.MMAuth = { getToken, setToken, clearToken, login, registerAccount };
+  window.MMAuth = { getToken, setToken, clearToken, login, registerAccount, logout };
   window.MM_API_BASE = API_BASE; // read-only exposure for debugging
 }
