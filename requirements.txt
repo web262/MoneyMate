@@ -3,3 +3,4 @@ flask-jwt-extended
 mysql-connector-python
 python-dotenv
 flask-cors
+gunicorn==22.0.0
