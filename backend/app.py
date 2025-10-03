@@ -1,7 +1,7 @@
 # backend/app.py
 import os
 from pathlib import Path
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 from flask_cors import CORS
 
@@ -24,24 +24,43 @@ def create_app() -> Flask:
     # Accept both /path and /path/ (avoids 308 redirects that break CORS preflights)
     app.url_map.strict_slashes = False
 
-    # CORS: allow your GitHub Pages origin (override in Render via ALLOWED_ORIGINS)
-    allowed_origins = os.environ.get(
-        "ALLOWED_ORIGINS",
-        "https://web262.github.io"
-    )
-    allowed = [o.strip().lower() for o in allowed_origins.split(",") if o.strip()]
+    # ---- CORS ---------------------------------------------------------------
+    # Allow your GitHub Pages origin (override in Render via ALLOWED_ORIGINS)
+    allowed_origins = os.environ.get("ALLOWED_ORIGINS", "https://web262.github.io")
+    allowed_set = {o.strip().lower() for o in allowed_origins.split(",") if o.strip()}
 
     CORS(
         app,
-        resources={r"/api/*": {"origins": allowed}},
+        resources={r"/api/*": {"origins": list(allowed_set)}},
         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization"],
         supports_credentials=True,
     )
 
+    # Universal preflight so OPTIONS never hits JWT/DB logic
+    @app.route("/api/<path:_unused>", methods=["OPTIONS"])
+    def _cors_preflight(_unused):
+        # Empty 204; headers will be ensured by after_request below
+        return ("", 204)
+
+    # Ensure CORS headers are present even on errors (401/404/500)
+    @app.after_request
+    def _force_cors_headers(resp):
+        origin = (request.headers.get("Origin") or "").lower()
+        if origin in allowed_set:
+            if not resp.headers.get("Access-Control-Allow-Origin"):
+                resp.headers["Access-Control-Allow-Origin"] = origin
+                resp.headers["Vary"] = "Origin"
+                resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+                resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        return resp
+    # ------------------------------------------------------------------------
+
+    # DB init
     from .database import init_app as init_db
     init_db(app)
 
+    # Blueprints
     from .routes.auth import auth_bp
     from .routes.transactions import tx_bp
     from .routes.budgets import budgets_bp
@@ -78,7 +97,7 @@ def create_app() -> Flask:
     def server_error(e):
         return jsonify({"error": "Internal server error"}), 500
 
-    print("\n[CORS] Allowed origins:", allowed, "\n")
+    print("\n[CORS] Allowed origins:", list(allowed_set), "\n")
     return app
 
 app = create_app()
