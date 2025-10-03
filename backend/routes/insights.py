@@ -1,5 +1,5 @@
 # backend/routes/insights.py
-from flask import Blueprint, jsonify, session
+from flask import Blueprint, jsonify, g
 from ..database import get_db
 from .auth import login_required
 
@@ -10,7 +10,7 @@ insights_bp = Blueprint("insights", __name__, url_prefix="/api/insights")
 @insights_bp.get("/advice")
 @login_required
 def get_insights():
-    uid = session["user_id"]
+    uid = g.user_id
     db = get_db()
     rows = db.execute("""
         SELECT type, amount, IFNULL(category,'Uncategorized') AS category
