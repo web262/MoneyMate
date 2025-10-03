@@ -1,4 +1,5 @@
-// frontend/js/auth-guard.js
+// Redirect to login if there's no token.
+// Uses api.js storage helpers so it works with both localStorage and sessionStorage.
 import { getToken } from "./api.js";
 
 (() => {
