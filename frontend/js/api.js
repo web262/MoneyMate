@@ -12,7 +12,8 @@ const RUNTIME_BASE =
   (typeof window !== "undefined" && window.MM_API_BASE) || null;
 
 // 👉 Your live Render backend (with trailing /api)
-const DEFAULT_BASE = "https://moneymate-ac0q.onrender.com/api";
+const DEFAULT_BASE = "https://moneymate-2.onrender.com/api";
+
 
 // Final base (runtime override > meta tag > default)
 export const API_BASE = (RUNTIME_BASE || META_BASE || DEFAULT_BASE).replace(
