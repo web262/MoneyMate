@@ -1,5 +1,5 @@
 # backend/routes/auth.py
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify, session, g
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from functools import wraps
@@ -11,15 +11,7 @@ from ..utils.mailer import send_email, build_reset_email
 # ─────────────────── Config ───────────────────
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret")
 JWT_EXP_HOURS = int(os.getenv("JWT_EXP_HOURS", 12))
-
-# ─────────────────── session guard ───────────────────
-def login_required(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not session.get("user_id"):
-            return jsonify(success=False, message="Unauthorized"), 401
-        return fn(*args, **kwargs)
-    return wrapper
+JWT_ALG = "HS256"
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -50,7 +42,7 @@ def ensure_schema():
     db.commit()
 
 @auth_bp.before_app_request
-def before_any():
+def _ensure_auth_schema():
     ensure_schema()
 
 # ─────────────────── helpers ───────────────────
@@ -81,7 +73,41 @@ def generate_jwt(user_id, email):
         "email": email,
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXP_HOURS)
     }
-    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+    return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALG)
+
+def _decode_bearer_token():
+    """Return (user_id, email) if Authorization: Bearer <jwt> is valid; else (None, None)."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None, None
+    token = auth.split(" ", 1)[1].strip()
+    try:
+        data = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALG])
+        return data.get("sub"), data.get("email")
+    except Exception:
+        return None, None
+
+def get_current_user_id():
+    """Prefer session, but accept a valid JWT bearer token for stateless requests."""
+    uid = session.get("user_id")
+    if uid:
+        g.user_id = uid
+        return uid
+    uid, _ = _decode_bearer_token()
+    if uid:
+        g.user_id = uid
+        return uid
+    return None
+
+# ─────────────────── guard ───────────────────
+def login_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        uid = get_current_user_id()
+        if not uid:
+            return jsonify(success=False, message="Unauthorized"), 401
+        return fn(*args, **kwargs)
+    return wrapper
 
 # ─────────────────── Register ───────────────────
 @auth_bp.post("/register")
@@ -121,35 +147,35 @@ def login():
     if not row or not check_password_hash(row["password_hash"], password):
         return jsonify(success=False, message="Invalid email or password"), 401
 
+    # Optional: keep cookie session for same-origin flows
     session["user_id"] = row["id"]
-    token = generate_jwt(row["id"], row["email"])
 
+    token = generate_jwt(row["id"], row["email"])
     return jsonify(
         success=True,
         access_token=token,
-        user={"id": row["id"], "name": row["name"], "email": row["email"]}
+        user={"id": row["id"], "name": row["name"], "email": row["email"]},
     )
 
 @auth_bp.post("/logout")
 def logout():
+    # Stateless JWT cannot be invalidated server-side; we just clear session.
     session.pop("user_id", None)
     return jsonify(success=True)
 
 @auth_bp.get("/me")
 def me():
-    uid = session.get("user_id")
+    uid = get_current_user_id()
     if not uid:
-        return jsonify(success=False)
+        return jsonify(success=False), 401
     r = get_db().execute("SELECT id, name, email FROM users WHERE id=?", (uid,)).fetchone()
     return jsonify(success=True, data=dict(r) if r else None)
 
 # ─────────────────── Change password ───────────────────
 @auth_bp.post("/change-password")
+@login_required
 def change_password():
-    uid = session.get("user_id")
-    if not uid:
-        return jsonify(success=False, message="Not logged in"), 401
-
+    uid = g.user_id  # set by login_required
     data = request.get_json(silent=True) or request.form.to_dict(flat=True) or {}
     cur = data.get("current_password") or ""
     new = data.get("new_password") or ""
@@ -228,8 +254,10 @@ def forgot_complete():
     if datetime.utcnow() > exp:
         return jsonify(success=False, message="Token expired"), 400
 
-    db.execute("UPDATE users SET password_hash=? WHERE id=?",
-               (generate_password_hash(new), row["user_id"]))
+    db.execute(
+        "UPDATE users SET password_hash=? WHERE id=?",
+        (generate_password_hash(new), row["user_id"])
+    )
     db.execute("UPDATE password_resets SET used=1 WHERE id=?", (row["id"],))
     db.commit()
     return jsonify(success=True, message="Password reset successful")
