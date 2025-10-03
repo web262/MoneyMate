@@ -5,14 +5,14 @@ from flask import Flask, jsonify
 from dotenv import load_dotenv
 from flask_cors import CORS
 
-# Load .env from repo root
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
+BASE_DIR = Path(__file__).resolve().parent
+FRONTEND_DIR = BASE_DIR.parent / "frontend"
+
 def create_app() -> Flask:
     app = Flask(__name__)
-
-    app.url_map.strict_slashes = False
 
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me"),
@@ -21,8 +21,10 @@ def create_app() -> Flask:
         JSON_SORT_KEYS=False,
     )
 
-    # ---- CORS ---------------------------------------------------------------
-    # Allow your GitHub Pages domain (comma-separate if you need more)
+    # Accept both /path and /path/ (avoids 308 redirects that break CORS preflights)
+    app.url_map.strict_slashes = False
+
+    # CORS: allow your GitHub Pages origin (override in Render via ALLOWED_ORIGINS)
     allowed_origins = os.environ.get(
         "ALLOWED_ORIGINS",
         "https://web262.github.io"
@@ -36,15 +38,10 @@ def create_app() -> Flask:
         allow_headers=["Content-Type", "Authorization"],
         supports_credentials=True,
     )
-    # ------------------------------------------------------------------------
 
-    # ---- DB init -----------------------------------------------------------
-    # (requires backend/__init__.py so 'backend' is a package)
     from .database import init_app as init_db
     init_db(app)
-    # ------------------------------------------------------------------------
 
-    # ---- Routes / Blueprints -----------------------------------------------
     from .routes.auth import auth_bp
     from .routes.transactions import tx_bp
     from .routes.budgets import budgets_bp
@@ -60,7 +57,6 @@ def create_app() -> Flask:
     app.register_blueprint(goals_bp)
     app.register_blueprint(settings_bp)
     app.register_blueprint(notifications_bp)
-    # ------------------------------------------------------------------------
 
     @app.get("/api/health")
     def health():
@@ -71,22 +67,18 @@ def create_app() -> Flask:
         return jsonify({
             "service": "MoneyMate API",
             "docs": "/api/health",
-            "frontend": "https://web262.github.io/MoneyMate",
+            "frontend": "https://web262.github.io/MoneyMate"
         })
 
     @app.errorhandler(404)
-    def not_found(_e):
+    def not_found(e):
         return jsonify({"error": "Not found"}), 404
 
     @app.errorhandler(500)
-    def server_error(_e):
+    def server_error(e):
         return jsonify({"error": "Internal server error"}), 500
 
-    print("\n[CORS] Allowed origins:", allowed)
-    print("[env] SMTP_HOST:", os.getenv("SMTP_HOST"))
-    print("[env] SMTP_USERNAME:", os.getenv("SMTP_USERNAME"))
-    print("[env] EMAIL_FROM:", os.getenv("EMAIL_FROM"), "\n")
-
+    print("\n[CORS] Allowed origins:", allowed, "\n")
     return app
 
 app = create_app()
