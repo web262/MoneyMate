@@ -25,7 +25,7 @@ def create_app() -> Flask:
     # Prefer setting this via env in Render: ALLOWED_ORIGINS=https://softwareengineeer.github.io
     allowed_origins = os.environ.get(
     "ALLOWED_ORIGINS",
-    "https://web262.github.io,https://softwareengineeer.github.io"  # allow both if needed
+    "https://web262.github.io"  # allow both if needed
 )
 
 allowed = [o.strip().lower() for o in allowed_origins.split(",") if o.strip()]
