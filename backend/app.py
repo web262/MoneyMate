@@ -5,11 +5,9 @@ from flask import Flask, jsonify
 from dotenv import load_dotenv
 from flask_cors import CORS
 
+# Load .env from repo root
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
-
-BASE_DIR = Path(__file__).resolve().parent
-FRONTEND_DIR = BASE_DIR.parent / "frontend"  # not used for Pages, fine to keep
 
 def create_app() -> Flask:
     app = Flask(__name__)
@@ -21,29 +19,30 @@ def create_app() -> Flask:
         JSON_SORT_KEYS=False,
     )
 
-    # ---- CORS (GitHub Pages origin only; no path; lowercase) ---------------
-    # Prefer setting this via env in Render: ALLOWED_ORIGINS=https://softwareengineeer.github.io
+    # ---- CORS ---------------------------------------------------------------
+    # Allow your GitHub Pages domain (comma-separate if you need more)
     allowed_origins = os.environ.get(
-    "ALLOWED_ORIGINS",
-    "https://web262.github.io"  # allow both if needed
-)
+        "ALLOWED_ORIGINS",
+        "https://web262.github.io"
+    )
+    allowed = [o.strip().lower() for o in allowed_origins.split(",") if o.strip()]
 
-allowed = [o.strip().lower() for o in allowed_origins.split(",") if o.strip()]
-
-CORS(
-    app,
-    resources={r"/api/*": {"origins": allowed}},
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
-    supports_credentials=True,
-)
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": allowed}},
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
+        supports_credentials=True,
+    )
     # ------------------------------------------------------------------------
 
-    # DB init
+    # ---- DB init -----------------------------------------------------------
+    # (requires backend/__init__.py so 'backend' is a package)
     from .database import init_app as init_db
     init_db(app)
+    # ------------------------------------------------------------------------
 
-    # Blueprints
+    # ---- Routes / Blueprints -----------------------------------------------
     from .routes.auth import auth_bp
     from .routes.transactions import tx_bp
     from .routes.budgets import budgets_bp
@@ -59,6 +58,7 @@ CORS(
     app.register_blueprint(goals_bp)
     app.register_blueprint(settings_bp)
     app.register_blueprint(notifications_bp)
+    # ------------------------------------------------------------------------
 
     @app.get("/api/health")
     def health():
@@ -69,15 +69,15 @@ CORS(
         return jsonify({
             "service": "MoneyMate API",
             "docs": "/api/health",
-            "frontend": "https://softwareengineeer.github.io/MoneyMate"
+            "frontend": "https://web262.github.io/MoneyMate",
         })
 
     @app.errorhandler(404)
-    def not_found(e):
+    def not_found(_e):
         return jsonify({"error": "Not found"}), 404
 
     @app.errorhandler(500)
-    def server_error(e):
+    def server_error(_e):
         return jsonify({"error": "Internal server error"}), 500
 
     print("\n[CORS] Allowed origins:", allowed)
