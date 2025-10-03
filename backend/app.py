@@ -12,6 +12,8 @@ load_dotenv(dotenv_path=ENV_PATH)
 def create_app() -> Flask:
     app = Flask(__name__)
 
+    app.url_map.strict_slashes = False
+
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me"),
         SESSION_COOKIE_HTTPONLY=True,
