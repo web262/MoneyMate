@@ -4,9 +4,10 @@ from datetime import datetime
 from ..database import get_db
 from .auth import login_required
 
-# Give the blueprint a prefix so all routes live under /api/transactions
+# All routes live under /api/transactions
 tx_bp = Blueprint("transactions", __name__, url_prefix="/api/transactions")
 
+# ---------- DB bootstrap ----------
 def ensure_schema():
     db = get_db()
     db.execute("""
@@ -24,10 +25,10 @@ def ensure_schema():
     db.commit()
 
 @tx_bp.before_app_request
-def before_any():
+def _ensure():
     ensure_schema()
 
-# ---- rudimentary auto-categorization ----
+# ---------- auto-categorization ----------
 KEYWORDS = {
     "groceries": ["grocery","supermarket","whole foods","aldi","lidl","shoprite"],
     "transport": ["uber","lyft","bus","train","metro","fuel","gas"],
@@ -39,9 +40,8 @@ KEYWORDS = {
     "entertainment": ["netflix","spotify","movie","game"],
     "salary": ["salary","payroll","paycheck","wage"],
     "freelance": ["freelance","contract","gig","upwork","fiverr"],
-    "interest": ["interest","dividend"]
+    "interest": ["interest","dividend"],
 }
-
 def auto_category(tx_type: str, description: str) -> str:
     if not description:
         return "Income" if tx_type == "income" else "Uncategorized"
@@ -51,50 +51,62 @@ def auto_category(tx_type: str, description: str) -> str:
             return cat.capitalize()
     return "Income" if tx_type == "income" else "Uncategorized"
 
-# ---- create (supports both '/' and '/add') ----
+# ---------- create ----------
+# Supports both /api/transactions/ (preferred) and /api/transactions/add
 @tx_bp.post("/")
 @tx_bp.post("/add")
 @login_required
 def create_txn():
     data = request.get_json(silent=True) or {}
-    tx_type = (data.get("type") or "").lower()
+
+    tx_type = (data.get("type") or "").lower().strip()
+    # Accept numbers with commas or string numbers
+    raw_amount = (data.get("amount") or "").__str__().replace(",", "").strip()
     try:
-        amount = float(data.get("amount") or 0)
+        amount = float(raw_amount)
     except Exception:
-        amount = 0
+        amount = 0.0
+
     description = (data.get("description") or "").strip()
     created_at = (data.get("created_at") or "").strip()
     category = (data.get("category") or "").strip() or auto_category(tx_type, description)
 
-    if tx_type not in ("income","expense") or amount <= 0:
+    if tx_type not in ("income", "expense") or amount <= 0:
         return jsonify(success=False, message="Invalid transaction payload"), 400
 
+    # Normalize created_at if provided (accepts ISO with/without Z)
     if created_at:
         try:
-            # accept ISO (with/without Z)
-            datetime.fromisoformat(created_at.replace("Z",""))
+            datetime.fromisoformat(created_at.replace("Z", ""))
         except Exception:
-            created_at = None
+            created_at = None  # fallback to DB default
 
     db = get_db()
     cur = db.execute(
-        "INSERT INTO transactions(user_id,type,amount,category,description,created_at) "
-        "VALUES(?,?,?,?,?,COALESCE(?, datetime('now')))",
-        (session["user_id"], tx_type, amount, category, description, created_at)
+        """
+        INSERT INTO transactions (user_id, type, amount, category, description, created_at)
+        VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+        """,
+        (session["user_id"], tx_type, amount, category, description, created_at),
     )
     db.commit()
     tid = cur.lastrowid
     row = db.execute("SELECT * FROM transactions WHERE id=?", (tid,)).fetchone()
-    return jsonify(success=True, transaction=dict(row))
+    return jsonify(success=True, transaction=dict(row)), 201
 
-# ---- list ----
+# ---------- list ----------
 @tx_bp.get("/all")
 @login_required
 def list_txns():
     uid = session["user_id"]
     start = request.args.get("start_date")
-    end   = request.args.get("end_date")
-    page_size = int(request.args.get("page_size") or 100)
+    end = request.args.get("end_date")
+    try:
+        page_size = int(request.args.get("page_size") or 100)
+        if page_size <= 0:
+            page_size = 100
+    except Exception:
+        page_size = 100
 
     sql = "SELECT * FROM transactions WHERE user_id=?"
     params = [uid]
@@ -110,7 +122,7 @@ def list_txns():
     rows = get_db().execute(sql, tuple(params)).fetchall()
     return jsonify(success=True, transactions=[dict(r) for r in rows])
 
-# ---- update ----
+# ---------- update ----------
 @tx_bp.patch("/<int:txn_id>")
 @login_required
 def update_txn(txn_id: int):
@@ -118,14 +130,15 @@ def update_txn(txn_id: int):
     fields, params = [], []
 
     if "type" in data:
-        t = (data.get("type") or "").lower()
+        t = (data.get("type") or "").lower().strip()
         if t not in ("income","expense"):
             return jsonify(success=False, message="Invalid type"), 400
         fields.append("type=?"); params.append(t)
 
     if "amount" in data:
         try:
-            amt = float(data.get("amount")); assert amt > 0
+            amt = float(str(data.get("amount")).replace(",", "").strip())
+            assert amt > 0
         except Exception:
             return jsonify(success=False, message="Invalid amount"), 400
         fields.append("amount=?"); params.append(amt)
@@ -133,8 +146,11 @@ def update_txn(txn_id: int):
     if "description" in data:
         desc = (data.get("description") or "").strip()
         fields.append("description=?"); params.append(desc)
-        if "category" not in data and "type" in data:
-            fields.append("category=?"); params.append(auto_category(data["type"], desc))
+        # If client didn't send category but did send type, auto-update category
+        if "category" not in data and ("type" in data or "type" not in data):
+            t = next((p for i, p in enumerate(params[:-1]) if fields[i] == "type=?"), None) or \
+                (data.get("type") or "")
+            fields.append("category=?"); params.append(auto_category((t or "").lower(), desc))
 
     if "category" in data:
         cat = (data.get("category") or "").strip() or None
@@ -148,15 +164,21 @@ def update_txn(txn_id: int):
 
     params.extend([txn_id, session["user_id"]])
     db = get_db()
-    db.execute(f"UPDATE transactions SET {', '.join(fields)} WHERE id=? AND user_id=?", tuple(params))
+    db.execute(
+        f"UPDATE transactions SET {', '.join(fields)} WHERE id=? AND user_id=?",
+        tuple(params),
+    )
     db.commit()
 
-    row = db.execute("SELECT * FROM transactions WHERE id=? AND user_id=?", (txn_id, session["user_id"])).fetchone()
+    row = db.execute(
+        "SELECT * FROM transactions WHERE id=? AND user_id=?",
+        (txn_id, session["user_id"])
+    ).fetchone()
     if not row:
         return jsonify(success=False, message="Not found"), 404
     return jsonify(success=True, transaction=dict(row))
 
-# ---- delete ----
+# ---------- delete ----------
 @tx_bp.delete("/<int:txn_id>")
 @login_required
 def delete_txn(txn_id: int):
@@ -167,7 +189,7 @@ def delete_txn(txn_id: int):
         return jsonify(success=False, message="Not found"), 404
     return jsonify(success=True)
 
-# ---- CSV EXPORT ----
+# ---------- CSV export ----------
 @tx_bp.get("/export")
 @login_required
 def export_csv():
@@ -178,9 +200,12 @@ def export_csv():
     import csv, io
     uid = session["user_id"]
     start = request.args.get("start_date")
-    end   = request.args.get("end_date")
+    end = request.args.get("end_date")
 
-    sql = "SELECT id, type, amount, category, description, created_at FROM transactions WHERE user_id=?"
+    sql = """
+        SELECT id, type, amount, category, description, created_at
+        FROM transactions WHERE user_id=?
+    """
     params = [uid]
     if start:
         sql += " AND date(created_at) >= date(?)"; params.append(start)
@@ -212,7 +237,7 @@ def export_csv():
     }
     return Response(csv_data, headers=headers)
 
-# ---- CSV IMPORT ----
+# ---------- CSV import ----------
 @tx_bp.post("/import")
 @login_required
 def import_csv():
@@ -253,7 +278,7 @@ def import_csv():
     db = get_db()
 
     for row in reader:
-        r = { (k or "").strip().lower(): (v or "").strip() for k,v in row.items() }
+        r = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
 
         date_str = pick(r, ["date","created_at"])
         tx_type  = (pick(r, ["type"]) or "").lower()
@@ -262,7 +287,7 @@ def import_csv():
         desc     = pick(r, ["description","memo","note"])
 
         try:
-            amount = float(amount_s)
+            amount = float(amount_s.replace(",", ""))
         except Exception:
             skipped += 1; continue
         if tx_type not in ("income","expense"):
