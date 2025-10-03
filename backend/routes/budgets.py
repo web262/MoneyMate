@@ -1,11 +1,12 @@
 # backend/routes/budgets.py
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify, g
 from ..database import get_db
 from .auth import login_required
 
 # All routes live under /api/budgets/*
 budgets_bp = Blueprint("budgets", __name__, url_prefix="/api/budgets")
 
+# ---------- schema ----------
 def ensure_schema():
     db = get_db()
     db.execute("""
@@ -25,20 +26,12 @@ def ensure_schema():
 def _ensure():
     ensure_schema()
 
-# ---------- helpers ----------
-def _require_user():
-    uid = session.get("user_id")
-    if not uid:
-        return None, (jsonify(success=False, message="Unauthorized"), 401)
-    return uid, None
-
 # ---------- create (POST /api/budgets/ or /api/budgets/add) ----------
 @budgets_bp.post("/")
 @budgets_bp.post("/add")
 @login_required
 def create_budget():
-    uid, err = _require_user()
-    if err: return err
+    uid = g.user_id
 
     data = request.get_json(silent=True) or {}
     category = (data.get("category") or "").strip()
@@ -57,15 +50,17 @@ def create_budget():
     )
     db.commit()
     bid = cur.lastrowid
-    row = db.execute("SELECT id, category, monthly_limit, created_at FROM budgets WHERE id=?", (bid,)).fetchone()
+    row = db.execute(
+        "SELECT id, category, monthly_limit, created_at FROM budgets WHERE id=?",
+        (bid,)
+    ).fetchone()
     return jsonify(success=True, budget=dict(row)), 201
 
 # ---------- list with MTD usage (GET /api/budgets/all) ----------
 @budgets_bp.get("/all")
 @login_required
 def list_budgets():
-    uid, err = _require_user()
-    if err: return err
+    uid = g.user_id
 
     db = get_db()
     rows = db.execute("""
@@ -102,8 +97,7 @@ def list_budgets():
 @budgets_bp.patch("/<int:bid>")
 @login_required
 def update_budget(bid: int):
-    uid, err = _require_user()
-    if err: return err
+    uid = g.user_id
 
     data = request.get_json(silent=True) or {}
     fields, params = [], []
@@ -126,11 +120,16 @@ def update_budget(bid: int):
 
     params.extend([bid, uid])
     db = get_db()
-    db.execute(f"UPDATE budgets SET {', '.join(fields)} WHERE id=? AND user_id=?", tuple(params))
+    db.execute(
+        f"UPDATE budgets SET {', '.join(fields)} WHERE id=? AND user_id=?",
+        tuple(params)
+    )
     db.commit()
 
-    row = db.execute("SELECT id, category, monthly_limit, created_at FROM budgets WHERE id=? AND user_id=?",
-                     (bid, uid)).fetchone()
+    row = db.execute(
+        "SELECT id, category, monthly_limit, created_at FROM budgets WHERE id=? AND user_id=?",
+        (bid, uid)
+    ).fetchone()
     if not row:
         return jsonify(success=False, message="Not found"), 404
     return jsonify(success=True, budget=dict(row))
@@ -139,11 +138,99 @@ def update_budget(bid: int):
 @budgets_bp.delete("/<int:bid>")
 @login_required
 def delete_budget(bid: int):
-    uid, err = _require_user()
-    if err: return err
+    uid = g.user_id
     db = get_db()
     cur = db.execute("DELETE FROM budgets WHERE id=? AND user_id=?", (bid, uid))
     db.commit()
     if cur.rowcount == 0:
         return jsonify(success=False, message="Not found"), 404
     return jsonify(success=True)
+
+# ---------- progress (GET /api/budgets/progress) ----------
+@budgets_bp.get("/progress")
+@login_required
+def get_progress():
+    """
+    Returns: { success, progress: [{category, monthly_limit, spent_mtd, pct}] }
+    pct is clamped to [0, +inf), client can clamp to 1.0 for UI.
+    """
+    uid = g.user_id
+    db = get_db()
+    rows = db.execute("""
+        SELECT
+          b.category,
+          b.monthly_limit,
+          IFNULL((
+            SELECT SUM(t.amount) FROM transactions t
+            WHERE t.user_id = b.user_id
+              AND t.type = 'expense'
+              AND t.category = b.category
+              AND strftime('%Y-%m', t.created_at) = strftime('%Y-%m','now')
+          ), 0) AS spent_mtd
+        FROM budgets b
+        WHERE b.user_id = ?
+        ORDER BY lower(b.category)
+    """, (uid,)).fetchall()
+
+    out = []
+    for r in rows:
+        limit = float(r["monthly_limit"])
+        spent = float(r["spent_mtd"])
+        pct = (spent / limit) if limit > 0 else 0.0
+        out.append({
+            "category": r["category"],
+            "monthly_limit": limit,
+            "spent_mtd": spent,
+            "pct": round(pct, 4),
+        })
+    return jsonify(success=True, progress=out)
+
+# ---------- alerts (GET /api/budgets/alerts) ----------
+@budgets_bp.get("/alerts")
+@login_required
+def get_alerts():
+    """
+    Simple alerts when a category crosses 80% or 100% of monthly limit (MTD).
+    Returns: { success, alerts: [{category, pct, message, level}] }
+      level: "warning" (>=0.8) or "danger" (>1.0)
+    """
+    uid = g.user_id
+    db = get_db()
+    rows = db.execute("""
+        SELECT
+          b.category,
+          b.monthly_limit,
+          IFNULL((
+            SELECT SUM(t.amount) FROM transactions t
+            WHERE t.user_id = b.user_id
+              AND t.type = 'expense'
+              AND t.category = b.category
+              AND strftime('%Y-%m', t.created_at) = strftime('%Y-%m','now')
+          ), 0) AS spent_mtd
+        FROM budgets b
+        WHERE b.user_id = ?
+    """, (uid,)).fetchall()
+
+    alerts = []
+    for r in rows:
+        limit = float(r["monthly_limit"])
+        spent = float(r["spent_mtd"])
+        pct = (spent / limit) if limit > 0 else 0.0
+        if limit <= 0:
+            continue
+        if pct >= 1.0:
+            alerts.append({
+                "category": r["category"],
+                "pct": round(pct, 4),
+                "level": "danger",
+                "message": f"You exceeded your {r['category']} budget (spent ${spent:.0f} / ${limit:.0f})."
+            })
+        elif pct >= 0.8:
+            alerts.append({
+                "category": r["category"],
+                "pct": round(pct, 4),
+                "level": "warning",
+                "message": f"You're at {pct*100:.0f}% of your {r['category']} budget (${spent:.0f} / ${limit:.0f})."
+            })
+
+    return jsonify(success=True, alerts=alerts)
