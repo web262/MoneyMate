@@ -4,6 +4,9 @@ from pathlib import Path
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 from flask_cors import CORS
+from .routes.notifications import notifications_bp, notify_bp
+app.register_blueprint(notifications_bp)
+app.register_blueprint(notify_bp) 
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
