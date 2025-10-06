@@ -340,24 +340,33 @@ async function loadGoals() {
 // ---- Optional: browser notifications ----
 async function notifyNow(sendEmail = false) {
   try {
-    const res = await getJSON("/notify/check/");
-    const items = [...(res.alerts || []), ...(res.goals || [])];
+    // new preview endpoint
+    const res = await getJSON("/notifications/preview");
+    const items = res?.alerts || [];
     if (!items.length) return;
 
+    // native notifications (optional)
     if ("Notification" in window) {
       if (Notification.permission === "default") {
         await Notification.requestPermission();
       }
       if (Notification.permission === "granted") {
-        items.slice(0, 3).forEach((msg) => new Notification("MoneyMate", { body: msg }));
+        items.slice(0, 3).forEach((msg) =>
+          new Notification("MoneyMate", { body: msg })
+        );
       }
     }
+
+    // email digest (optional)
     if (sendEmail) {
-      await postJSON("/notify/dispatch/", {});
+      await postJSON("/notifications/send", {}); // new send endpoint
     }
   } catch (e) {
-    console.error(e);
+    // don't spam the console or break the page if notifications are blocked
+    console.debug("notify skipped:", e?.message || e);
   }
 }
 notifyNow(false);
-document.getElementById("notifBell")?.addEventListener("click", () => notifyNow(true));
+document.getElementById("notifBell")?.addEventListener("click", () =>
+  notifyNow(true)
+);
