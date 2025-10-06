@@ -18,27 +18,31 @@ def create_app() -> Flask:
     # Cross-site session cookie so GitHub Pages (github.io) can talk to Render API
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me"),
+        # IMPORTANT for cross-site session cookies (github.io -> onrender.com)
         SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE="None",  # IMPORTANT for cross-site
-        SESSION_COOKIE_SECURE=True,      # required when SameSite=None
+        SESSION_COOKIE_SAMESITE="None",   # was "Lax"
+        SESSION_COOKIE_SECURE=True,       # required when SameSite=None on HTTPS
         JSON_SORT_KEYS=False,
     )
 
-    # Accept both /path and /path/ (avoids 308 redirects that can break CORS preflights)
+    # Avoid 308 redirects that break preflights
     app.url_map.strict_slashes = False
 
-    # ---- CORS ---------------------------------------------------------------
-    # Allow your GitHub Pages origin (override in Render via ALLOWED_ORIGINS)
-    allowed_origins = os.environ.get("ALLOWED_ORIGINS", "https://web262.github.io")
-    allowed_set = {o.strip().lower() for o in allowed_origins.split(",") if o.strip()}
+    # CORS: EXACT origin(s) that may send credentials
+    allowed_origins = os.environ.get(
+        "ALLOWED_ORIGINS",
+        "https://web262.github.io"     # <= your GitHub Pages origin (no trailing slash)
+    )
+    allowed = [o.strip() for o in allowed_origins.split(",") if o.strip()]
 
     CORS(
         app,
-        resources={r"/api/*": {"origins": list(allowed_set)}},
-        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        resources={r"/api/*": {"origins": allowed}},
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization"],
-        supports_credentials=True,  # allow cookies across sites
+        supports_credentials=True,   # sets Access-Control-Allow-Credentials: true
     )
+
 
     # Universal preflight so OPTIONS never hits auth/DB logic
     @app.route("/api/<path:_unused>", methods=["OPTIONS"])
