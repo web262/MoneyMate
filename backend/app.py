@@ -4,9 +4,6 @@ from pathlib import Path
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 from flask_cors import CORS
-from .routes.notifications import notifications_bp, notify_bp
-app.register_blueprint(notifications_bp)
-app.register_blueprint(notify_bp) 
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
@@ -14,17 +11,20 @@ load_dotenv(dotenv_path=ENV_PATH)
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
 
+
 def create_app() -> Flask:
     app = Flask(__name__)
 
+    # Cross-site session cookie so GitHub Pages (github.io) can talk to Render API
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me"),
         SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SAMESITE="None",  # IMPORTANT for cross-site
+        SESSION_COOKIE_SECURE=True,      # required when SameSite=None
         JSON_SORT_KEYS=False,
     )
 
-    # Accept both /path and /path/ (avoids 308 redirects that break CORS preflights)
+    # Accept both /path and /path/ (avoids 308 redirects that can break CORS preflights)
     app.url_map.strict_slashes = False
 
     # ---- CORS ---------------------------------------------------------------
@@ -35,15 +35,14 @@ def create_app() -> Flask:
     CORS(
         app,
         resources={r"/api/*": {"origins": list(allowed_set)}},
-        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization"],
-        supports_credentials=True,
+        supports_credentials=True,  # allow cookies across sites
     )
 
-    # Universal preflight so OPTIONS never hits JWT/DB logic
+    # Universal preflight so OPTIONS never hits auth/DB logic
     @app.route("/api/<path:_unused>", methods=["OPTIONS"])
     def _cors_preflight(_unused):
-        # Empty 204; headers will be ensured by after_request below
         return ("", 204)
 
     # Ensure CORS headers are present even on errors (401/404/500)
@@ -55,7 +54,7 @@ def create_app() -> Flask:
                 resp.headers["Access-Control-Allow-Origin"] = origin
                 resp.headers["Vary"] = "Origin"
                 resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-                resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+                resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
         return resp
     # ------------------------------------------------------------------------
 
@@ -102,6 +101,7 @@ def create_app() -> Flask:
 
     print("\n[CORS] Allowed origins:", list(allowed_set), "\n")
     return app
+
 
 app = create_app()
 
