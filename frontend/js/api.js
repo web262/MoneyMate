@@ -14,7 +14,7 @@ const DEFAULT_BASE = "https://moneymate-2.onrender.com/api";
 // Final base (runtime override > meta tag > default)
 export const API_BASE = (RUNTIME_BASE || META_BASE || DEFAULT_BASE).replace(/\/+$/, "");
 
-// ===== Token helpers (JWT is optional; server also uses session cookie) =====
+// ===== Token helpers (JWT) =====
 const TOKEN_KEY = "mm_jwt";
 
 export function getToken() {
@@ -45,7 +45,16 @@ function resolveArgs(methodOrOpts, body) {
     : (methodOrOpts || { method: "GET" });
 }
 
-// ===== Core request (cookies enabled) =====
+async function parseMaybeJson(res) {
+  const ct = res.headers.get("content-type") || "";
+  if (res.status === 204) return null;
+  if (ct.includes("application/json")) {
+    try { return await res.json(); } catch { return null; }
+  }
+  try { return await res.text(); } catch { return null; }
+}
+
+// ===== Core request (JWT in header; NO cookies) =====
 export async function api(path, methodOrOpts = "GET", maybeBody = null) {
   const { method = "GET", body, headers = {}, timeoutMs = 20000, ...rest } =
     resolveArgs(methodOrOpts, maybeBody);
@@ -54,17 +63,14 @@ export async function api(path, methodOrOpts = "GET", maybeBody = null) {
   const url = normalizeUrl(path);
 
   const ac = new AbortController();
-  const t = setTimeout(
-    () => ac.abort(new DOMException("timeout", "AbortError")),
-    timeoutMs
-  );
+  const timer = setTimeout(() => ac.abort(new DOMException("timeout", "AbortError")), timeoutMs);
 
   let res;
   try {
     res = await fetch(url, {
       method,
       mode: "cors",
-      credentials: "include",           // <-- IMPORTANT: send/receive Flask session cookie
+      // IMPORTANT: no 'credentials: include' (avoids cross-site cookie issues on GitHub Pages)
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -75,56 +81,136 @@ export async function api(path, methodOrOpts = "GET", maybeBody = null) {
       ...rest,
     });
   } catch (err) {
-    clearTimeout(t);
+    clearTimeout(timer);
     if (err?.name === "AbortError") throw new Error("Network timeout. Please try again.");
     throw new Error("Network error. Check your connection and try again.");
   } finally {
-    clearTimeout(t);
+    clearTimeout(timer);
   }
 
-  // Parse JSON when present; safely handle 204/empty text
-  const ct = res.headers.get("content-type") || "";
-  let data = null, text = "";
-  try {
-    if (res.status !== 204) {
-      if (ct.includes("application/json")) data = await res.json();
-      else text = await res.text();
-    }
-  } catch (_) { /* ignore parse errors */ }
+  const payload = await parseMaybeJson(res);
+  const data = typeof payload === "string" ? { text: payload } : payload;
 
   if (!res.ok) {
-    if (res.status === 401) clearToken(); // clear local JWT on unauthorized
-    const msg =
-      (data && (data.error || data.message)) ||
-      text ||
-      `Request failed (${res.status})`;
+    if (res.status === 401) clearToken();
+    const msg = (data && (data.error || data.message)) || (typeof payload === "string" ? payload : "") || `Request failed (${res.status})`;
     throw new Error(msg);
   }
 
-  return data ?? (text ? { ok: true, text } : { ok: true });
+  return data ?? { ok: true };
 }
 
 // ===== Convenience helpers =====
 export const getJSON  = (path)       => api(path, "GET");
 export const postJSON = (path, body) => api(path, "POST", body);
 export const putJSON  = (path, body) => api(path, "PUT", body);
+export const patchJSON= (path, body) => api(path, "PATCH", body);
 export const delJSON  = (path)       => api(path, "DELETE");
 
-// ===== Auth helpers (keep trailing slashes to avoid 308) =====
-export async function login(email, password) {
-  const data = await postJSON("/auth/login/", { email, password });
+// ===== Auth helpers (no trailing slashes needed) =====
+export async function registerAccount(payload, { remember = false } = {}) {
+  const data = await postJSON("/auth/register", payload);
+  const token = data?.access_token || data?.token || data?.jwt || data?.accessToken;
+  if (token) setToken(token, { remember });
+  return data;
+}
+
+export async function login(email, password, { remember = false } = {}) {
+  const data = await postJSON("/auth/login", { email, password });
   const token = data?.access_token || data?.token || data?.jwt || data?.accessToken;
   if (!token) throw new Error("No token returned by server.");
+  setToken(token, { remember });
   return { token, user: data.user ?? null, raw: data };
 }
-export async function registerAccount(payload) {
-  return await postJSON("/auth/register/", payload);
+
+export async function verifyToken() {
+  return await postJSON("/auth/token/verify", {});
 }
-export function logout() { clearToken(); }
+
+export async function refreshToken() {
+  const data = await postJSON("/auth/token/refresh", {});
+  const token = data?.access_token;
+  if (token) setToken(token, { remember: !!localStorage.getItem(TOKEN_KEY) });
+  return data;
+}
+
+export async function serverLogout() {
+  // Clears server session fallback (harmless if unused)
+  try { await postJSON("/auth/logout", {}); } catch {}
+}
+
+export function logout() {
+  clearToken();
+  // optional: also ping server
+  serverLogout();
+}
+
+// ===== Transactions =====
+export async function listTransactions(params = {}) {
+  const qs = new URLSearchParams(params).toString();
+  return await getJSON(`/transactions${qs ? `?${qs}` : ""}`);
+}
+
+export async function createTransaction(tx) {
+  return await postJSON("/transactions", tx);
+}
+
+export async function updateTransaction(id, patch) {
+  return await patchJSON(`/transactions/${id}`, patch);
+}
+
+export async function deleteTransaction(id) {
+  return await delJSON(`/transactions/${id}`);
+}
+
+// ===== CSV export/import =====
+export async function exportCSV(params = {}) {
+  const qs = new URLSearchParams(params).toString();
+  const url = normalizeUrl(`/transactions/export${qs ? `?${qs}` : ""}`);
+  const token = getToken();
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (!res.ok) throw new Error(`Export failed: ${res.status} ${res.statusText}`);
+  return await res.blob(); // caller should trigger download
+}
+
+export async function importCSV(fileOrText) {
+  const token = getToken();
+  const init = { method: "POST", headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) } };
+
+  if (fileOrText instanceof File) {
+    const form = new FormData();
+    form.append("file", fileOrText);
+    init.body = form;
+  } else {
+    init.headers["Content-Type"] = "text/csv; charset=utf-8";
+    init.body = typeof fileOrText === "string" ? fileOrText : new TextDecoder().decode(fileOrText);
+  }
+
+  const res = await fetch(normalizeUrl("/transactions/import"), init);
+  const data = await parseMaybeJson(res);
+  if (!res.ok || (data && (data.ok === false || data.success === false))) {
+    const msg = (data && (data.message || data.error)) || `Import failed: ${res.status}`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+// ===== Dashboard summary =====
+export async function getSummary() {
+  return await getJSON("/transactions/summary");
+}
 
 // Expose for quick debugging in browser console
 if (typeof window !== "undefined") {
-  window.api = api;
-  window.MMAuth = { getToken, setToken, clearToken, login, registerAccount, logout };
+  window.MMApi = {
+    API_BASE, getToken, setToken, clearToken,
+    login, registerAccount, verifyToken, refreshToken, logout, serverLogout,
+    listTransactions, createTransaction, updateTransaction, deleteTransaction,
+    exportCSV, importCSV, getSummary,
+  };
   window.MM_API_BASE = API_BASE;
 }
