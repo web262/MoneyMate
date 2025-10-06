@@ -16,7 +16,7 @@ JWT_ALG = "HS256"
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# ─────────────────── schema ───────────────────
+# ─────────────────── Schema ───────────────────
 def ensure_schema():
     db = get_db()
     db.execute("""
@@ -45,7 +45,7 @@ def ensure_schema():
 def _ensure_auth_schema():
     ensure_schema()
 
-# ─────────────────── helpers ───────────────────
+# ─────────────────── Helpers ───────────────────
 def _get_payload():
     if request.is_json:
         data = request.get_json(silent=True) or {}
@@ -71,7 +71,7 @@ def generate_jwt(user_id, email):
     payload = {
         "sub": user_id,
         "email": email,
-        "exp": datetime.utcnow() + timedelta(hours=JWT_EXP_HOURS)
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXP_HOURS),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALG)
 
@@ -96,10 +96,13 @@ def get_current_user_id():
     uid, _ = _decode_bearer_token()
     if uid:
         g.user_id = uid
+        # Optionally prime the session so subsequent requests also see it
+        session["user_id"] = uid
+        session.permanent = True
         return uid
     return None
 
-# ─────────────────── guard ───────────────────
+# ─────────────────── Guard ───────────────────
 def login_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -157,7 +160,6 @@ def login():
         access_token=token,
         user={"id": row["id"], "name": row["name"], "email": row["email"]},
     )
-
 
 @auth_bp.post("/logout")
 def logout():
