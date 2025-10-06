@@ -130,6 +130,23 @@ def register():
         user={"id": user_id, "name": name, "email": email},
     ), 201
 
+
+# ─────────────────── Token verify (for SPA guard) ───────────────────
+@auth_bp.post("/token/verify")
+def token_verify():
+    """Validate Authorization: Bearer <jwt> and return basic user info."""
+    uid, email = _decode_bearer_token()
+    if not uid:
+        return jsonify(success=False, message="Invalid token"), 401
+
+    row = get_db().execute(
+        "SELECT id, name, email FROM users WHERE id=?", (uid,)
+    ).fetchone()
+
+    # If the DB user is missing but the token is valid, still acknowledge success
+    user = dict(row) if row else {"id": uid, "name": None, "email": email}
+    return jsonify(success=True, user=user)
+
 # ─────────────────── Login / Logout / Me ───────────────────
 @auth_bp.post("/login")
 def login():
