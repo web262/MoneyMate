@@ -3,15 +3,11 @@ import { getToken, verifyToken, clearToken } from "./api.js";
 
 export async function requireAuth() {
   const token = getToken();
-  if (!token) {
-    redirectToLogin();
-    return false;
-  }
+  if (!token) return redirectToLogin(), false;
   try {
-    // lightweight server check; uses Authorization header from api.js
-    await verifyToken(); // POST /auth/token/verify
+    await verifyToken();         // server-side check (Authorization header added by api.js)
     return true;
-  } catch (_) {
+  } catch {
     clearToken();
     redirectToLogin();
     return false;
@@ -19,6 +15,6 @@ export async function requireAuth() {
 }
 
 export function redirectToLogin() {
-  const here = encodeURIComponent(location.pathname + location.search);
-  location.replace(`./login.html?next=${here}`);
+  const next = encodeURIComponent(location.pathname + location.search);
+  location.replace(`./login.html?next=${next}`);
 }
