@@ -92,10 +92,13 @@ export async function api(path, methodOrOpts = "GET", maybeBody = null) {
   const data = typeof payload === "string" ? { text: payload } : payload;
 
   if (!res.ok) {
-    if (res.status === 401) clearToken();
-    const msg = (data && (data.error || data.message)) || (typeof payload === "string" ? payload : "") || `Request failed (${res.status})`;
-    throw new Error(msg);
-  }
+  // Do NOT clear the token here. Let the page’s auth-guard decide.
+  const msg =
+    (data && (data.error || data.message)) ||
+    text ||
+    `Request failed (${res.status})`;
+  throw new Error(msg);
+}
 
   return data ?? { ok: true };
 }
