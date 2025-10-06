@@ -147,8 +147,9 @@ def login():
     if not row or not check_password_hash(row["password_hash"], password):
         return jsonify(success=False, message="Invalid email or password"), 401
 
-    # Optional: keep cookie session for same-origin flows
+    # Keep Flask session cookie around (pairs with PERMANENT_SESSION_LIFETIME in app config)
     session["user_id"] = row["id"]
+    session.permanent = True
 
     token = generate_jwt(row["id"], row["email"])
     return jsonify(
@@ -156,6 +157,7 @@ def login():
         access_token=token,
         user={"id": row["id"], "name": row["name"], "email": row["email"]},
     )
+
 
 @auth_bp.post("/logout")
 def logout():
