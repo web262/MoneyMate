@@ -132,8 +132,10 @@ def register():
 
 
 # ─────────────────── Token verify (for SPA guard) ───────────────────
-@auth_bp.post("/token/verify")
-def token_verify():
+# ─────────────────── Token verify (for SPA guard) ───────────────────
+# Use a unique endpoint name so we don't conflict with any existing route.
+@auth_bp.post("/token/verify", endpoint="token_verify_spa")
+def token_verify_spa():
     """Validate Authorization: Bearer <jwt> and return basic user info."""
     uid, email = _decode_bearer_token()
     if not uid:
@@ -143,9 +145,9 @@ def token_verify():
         "SELECT id, name, email FROM users WHERE id=?", (uid,)
     ).fetchone()
 
-    # If the DB user is missing but the token is valid, still acknowledge success
     user = dict(row) if row else {"id": uid, "name": None, "email": email}
     return jsonify(success=True, user=user)
+
 
 # ─────────────────── Login / Logout / Me ───────────────────
 @auth_bp.post("/login")
