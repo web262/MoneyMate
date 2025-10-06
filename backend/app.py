@@ -20,6 +20,7 @@ def create_app() -> Flask:
         SESSION_COOKIE_SECURE=True,
 
         JSON_SORT_KEYS=False,
+        PERMANENT_SESSION_LIFETIME=timedelta(days=14),
     )
 
     # Avoid 308 redirects that can break CORS preflights
