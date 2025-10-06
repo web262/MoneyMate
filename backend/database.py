@@ -1,13 +1,10 @@
 # backend/database.py
-import os
 import sqlite3
 from pathlib import Path
-from flask import g
+from flask import g, current_app
 
-# ---- DB path ----
 DB_PATH = Path(__file__).resolve().parent / "moneymate.db"
 
-# ---- Schema (extend later as you add features) ----
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
 
@@ -29,30 +26,36 @@ CREATE TABLE IF NOT EXISTS transactions (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS password_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 """
 
 PRAGMAS = [
-    ("journal_mode", "WAL"),     # better concurrency
-    ("synchronous", "NORMAL"),   # durability/perf tradeoff (safe for web apps)
+    ("journal_mode", "WAL"),
+    ("synchronous", "NORMAL"),
     ("temp_store", "MEMORY"),
     ("foreign_keys", "ON"),
 ]
 
-# ---- Connection helpers ----
 def _connect():
     db = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
     db.row_factory = sqlite3.Row
-    # Apply pragmas
     cur = db.cursor()
-    for key, val in PRAGMAS:
-        cur.execute(f"PRAGMA {key}={val};")
+    for k, v in PRAGMAS:
+        cur.execute(f"PRAGMA {k}={v};")
     cur.close()
     return db
 
 def get_db():
-    """Get a per-request SQLite connection."""
     if "db" not in g:
-        # Ensure parent dir exists (in case of containerized fresh start)
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         g.db = _connect()
     return g.db
@@ -62,7 +65,6 @@ def close_db(e=None):
     if db is not None:
         db.close()
 
-# ---- Initialization ----
 def _ensure_schema():
     db = _connect()
     try:
@@ -71,21 +73,14 @@ def _ensure_schema():
     finally:
         db.close()
 
-def init_app(app):
+def init_db(app):
     """
-    Wire DB lifecycle to the Flask app.
-    - Creates schema on first request (and on each cold start).
-    - Closes the connection after each request.
+    Flask 3: no before_first_request. Ensure schema eagerly at startup,
+    then register teardown for per-request connection cleanup.
     """
-    @app.before_first_request
-    def _init():
+    with app.app_context():
         _ensure_schema()
+        if current_app:
+            current_app.logger.info("DB schema ensured at startup.")
 
     app.teardown_appcontext(close_db)
-
-    # Optional: CLI command to (re)create schema manually:
-    @app.cli.command("init-db")
-    def init_db_cmd():
-        """Initialize the database schema."""
-        _ensure_schema()
-        print("Initialized the database.")
