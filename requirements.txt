@@ -5,3 +5,4 @@ python-dotenv
 flask-cors
 gunicorn==22.0.0
 PyJWT
+Werkzeug==3.0.3
