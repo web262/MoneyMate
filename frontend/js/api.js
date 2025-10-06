@@ -31,6 +31,10 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(TOKEN_KEY);
 }
+export function verifyToken() {
+  // simple ping; server uses Authorization header from api()
+  return postJSON("/auth/token/verify", {});
+}
 
 // ===== Internals =====
 function normalizeUrl(path) {
@@ -92,13 +96,11 @@ export async function api(path, methodOrOpts = "GET", maybeBody = null) {
   const data = typeof payload === "string" ? { text: payload } : payload;
 
   if (!res.ok) {
-  // Do NOT clear the token here. Let the page’s auth-guard decide.
-  const msg =
-    (data && (data.error || data.message)) ||
-    text ||
-    `Request failed (${res.status})`;
+  // Do NOT clear the token here; the guard decides what to do.
+  const msg = (data && (data.error || data.message)) || text || `Request failed (${res.status})`;
   throw new Error(msg);
 }
+
 
   return data ?? { ok: true };
 }
