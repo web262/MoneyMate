@@ -43,7 +43,7 @@ def create_app() -> Flask:
     )
 
     # ---- DB + routes ----
-    from .database import init_app as init_db
+    from .database import init_db
     init_db(app)
 
     from .routes.auth import auth_bp
