@@ -1,8 +1,8 @@
 # backend/routes/transactions.py
-from flask import Blueprint, request, jsonify, session, Response
+from flask import Blueprint, request, jsonify, Response, g
 from datetime import datetime
 from ..database import get_db
-from .auth import login_required
+from .auth import login_required, get_current_user_id  # <- use same auth helper
 
 # All routes live under /api/transactions
 tx_bp = Blueprint("transactions", __name__, url_prefix="/api/transactions")
@@ -27,6 +27,10 @@ def ensure_schema():
 @tx_bp.before_app_request
 def _ensure():
     ensure_schema()
+
+# Utility: current user id (from session or bearer)
+def _uid():
+    return getattr(g, "user_id", None) or get_current_user_id()
 
 # ---------- auto-categorization ----------
 KEYWORDS = {
@@ -57,10 +61,13 @@ def auto_category(tx_type: str, description: str) -> str:
 @tx_bp.post("/add")
 @login_required
 def create_txn():
+    uid = _uid()
+    if not uid:
+        return jsonify(success=False, message="Unauthorized"), 401
+
     data = request.get_json(silent=True) or {}
 
     tx_type = (data.get("type") or "").lower().strip()
-    # Accept numbers with commas or string numbers
     raw_amount = (data.get("amount") or "").__str__().replace(",", "").strip()
     try:
         amount = float(raw_amount)
@@ -74,7 +81,6 @@ def create_txn():
     if tx_type not in ("income", "expense") or amount <= 0:
         return jsonify(success=False, message="Invalid transaction payload"), 400
 
-    # Normalize created_at if provided (accepts ISO with/without Z)
     if created_at:
         try:
             datetime.fromisoformat(created_at.replace("Z", ""))
@@ -87,20 +93,23 @@ def create_txn():
         INSERT INTO transactions (user_id, type, amount, category, description, created_at)
         VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
         """,
-        (session["user_id"], tx_type, amount, category, description, created_at),
+        (uid, tx_type, amount, category, description, created_at),
     )
     db.commit()
     tid = cur.lastrowid
-    row = db.execute("SELECT * FROM transactions WHERE id=?", (tid,)).fetchone()
+    row = db.execute("SELECT * FROM transactions WHERE id=? AND user_id=?", (tid, uid)).fetchone()
     return jsonify(success=True, transaction=dict(row)), 201
 
 # ---------- list ----------
 @tx_bp.get("/all")
 @login_required
 def list_txns():
-    uid = session["user_id"]
+    uid = _uid()
+    if not uid:
+        return jsonify(success=False, message="Unauthorized"), 401
+
     start = request.args.get("start_date")
-    end = request.args.get("end_date")
+    end   = request.args.get("end_date")
     try:
         page_size = int(request.args.get("page_size") or 100)
         if page_size <= 0:
@@ -126,6 +135,10 @@ def list_txns():
 @tx_bp.patch("/<int:txn_id>")
 @login_required
 def update_txn(txn_id: int):
+    uid = _uid()
+    if not uid:
+        return jsonify(success=False, message="Unauthorized"), 401
+
     data = request.get_json(silent=True) or {}
     fields, params = [], []
 
@@ -147,10 +160,14 @@ def update_txn(txn_id: int):
         desc = (data.get("description") or "").strip()
         fields.append("description=?"); params.append(desc)
         # If client didn't send category but did send type, auto-update category
-        if "category" not in data and ("type" in data or "type" not in data):
-            t = next((p for i, p in enumerate(params[:-1]) if fields[i] == "type=?"), None) or \
-                (data.get("type") or "")
-            fields.append("category=?"); params.append(auto_category((t or "").lower(), desc))
+        if "category" not in data:
+            t = None
+            for i, f in enumerate(fields):
+                if f == "type=?":
+                    t = params[i]
+                    break
+            t = (t or data.get("type") or "").lower()
+            fields.append("category=?"); params.append(auto_category(t, desc))
 
     if "category" in data:
         cat = (data.get("category") or "").strip() or None
@@ -162,7 +179,7 @@ def update_txn(txn_id: int):
     if not fields:
         return jsonify(success=False, message="No changes"), 400
 
-    params.extend([txn_id, session["user_id"]])
+    params.extend([txn_id, uid])
     db = get_db()
     db.execute(
         f"UPDATE transactions SET {', '.join(fields)} WHERE id=? AND user_id=?",
@@ -172,7 +189,7 @@ def update_txn(txn_id: int):
 
     row = db.execute(
         "SELECT * FROM transactions WHERE id=? AND user_id=?",
-        (txn_id, session["user_id"])
+        (txn_id, uid)
     ).fetchone()
     if not row:
         return jsonify(success=False, message="Not found"), 404
@@ -182,8 +199,11 @@ def update_txn(txn_id: int):
 @tx_bp.delete("/<int:txn_id>")
 @login_required
 def delete_txn(txn_id: int):
+    uid = _uid()
+    if not uid:
+        return jsonify(success=False, message="Unauthorized"), 401
     db = get_db()
-    cur = db.execute("DELETE FROM transactions WHERE id=? AND user_id=?", (txn_id, session["user_id"]))
+    cur = db.execute("DELETE FROM transactions WHERE id=? AND user_id=?", (txn_id, uid))
     db.commit()
     if cur.rowcount == 0:
         return jsonify(success=False, message="Not found"), 404
@@ -198,9 +218,12 @@ def export_csv():
     Query params: start_date=YYYY-MM-DD, end_date=YYYY-MM-DD
     """
     import csv, io
-    uid = session["user_id"]
+    uid = _uid()
+    if not uid:
+        return jsonify(success=False, message="Unauthorized"), 401
+
     start = request.args.get("start_date")
-    end = request.args.get("end_date")
+    end   = request.args.get("end_date")
 
     sql = """
         SELECT id, type, amount, category, description, created_at
@@ -249,6 +272,9 @@ def import_csv():
       date|created_at, type, amount, category (optional), description
     """
     import csv, io
+    uid = _uid()
+    if not uid:
+        return jsonify(success=False, message="Unauthorized"), 401
 
     payload = None
     if "file" in request.files:
@@ -287,7 +313,7 @@ def import_csv():
         desc     = pick(r, ["description","memo","note"])
 
         try:
-            amount = float(amount_s.replace(",", ""))
+            amount = float(str(amount_s).replace(",", ""))
         except Exception:
             skipped += 1; continue
         if tx_type not in ("income","expense"):
@@ -302,7 +328,7 @@ def import_csv():
               AND IFNULL(description,'')=?
               AND substr(created_at,1,16)=substr(?,1,16)
             LIMIT 1
-        """, (session["user_id"], tx_type, amount, desc, date_str)).fetchone()
+        """, (uid, tx_type, amount, desc, date_str)).fetchone()
 
         if dup:
             skipped += 1
@@ -311,7 +337,7 @@ def import_csv():
         db.execute("""
             INSERT INTO transactions (user_id, type, amount, category, description, created_at)
             VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
-        """, (session["user_id"], tx_type, amount, cat, desc, date_str))
+        """, (uid, tx_type, amount, cat, desc, date_str))
         created += 1
 
     db.commit()
