@@ -1,8 +1,15 @@
-import { api, getJSON, postJSON, delJSON, clearToken } from "./api.js";
+// frontend/js/dashboard.js
+import {
+  getJSON,
+  postJSON,
+  delJSON,
+  clearToken,
+} from "./api.js";
+import { requireAuth, redirectToLogin } from "./auth-guard.js";
 
-const $ = (s, r = document) => r.querySelector(s);
+const $  = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
-const fmt = (d) => d.toISOString().split("T")[0];
+const fmtDate = (d) => d.toISOString().split("T")[0];
 
 let period = "weekly"; // weekly | monthly | custom
 let start = null;
@@ -11,13 +18,9 @@ let end = null;
 let toast, txModal, goalModal, contribModal, contribForm;
 
 window.addEventListener("DOMContentLoaded", async () => {
-  // Session check (api.js throws on 401)
-  try {
-    await getJSON("/auth/me/");
-  } catch {
-    location.replace("login.html?next=dashboard.html");
-    return;
-  }
+  // ---- Auth guard (uses Authorization: Bearer <token>) ----
+  const ok = await requireAuth();
+  if (!ok) return; // redirected to login
 
   toast = new bootstrap.Toast($("#toast"), { delay: 2500 });
   txModal = new bootstrap.Modal($("#txModal"));
@@ -71,10 +74,10 @@ function computeDefaultRange() {
   } else {
     start = $("#startDate").value ? new Date($("#startDate").value) : new Date(now.getFullYear(), now.getMonth(), 1);
     end = $("#endDate").value ? new Date($("#endDate").value) : now;
-    $("#startDate").value = fmt(start);
-    $("#endDate").value = fmt(end);
+    $("#startDate").value = fmtDate(start);
+    $("#endDate").value = fmtDate(end);
   }
-  $("#dateRange").textContent = `${fmt(start)} → ${fmt(end)}`;
+  $("#dateRange").textContent = `${fmtDate(start)} → ${fmtDate(end)}`;
 }
 
 // ---------- Forms ----------
@@ -84,10 +87,10 @@ function setupForms() {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const payload = Object.fromEntries(fd.entries());
-    if (payload.created_at === "") delete payload.created_at;
+    if (!payload.created_at) delete payload.created_at;
     payload.amount = Number(payload.amount);
     try {
-      await postJSON("/transactions/", payload);
+      await postJSON("/transactions", payload);   // no trailing slash
       txModal.hide();
       toastMsg("Transaction added");
       await refreshAll();
@@ -103,7 +106,7 @@ function setupForms() {
     const payload = Object.fromEntries(fd.entries());
     payload.target_amount = Number(payload.target_amount);
     try {
-      await postJSON("/goals/", payload);
+      await postJSON("/goals", payload);
       goalModal.hide();
       e.currentTarget.reset();
       toastMsg("Goal created");
@@ -122,7 +125,7 @@ function setupForms() {
     payload.amount = Number(payload.amount);
     payload.goal_id = Number(payload.goal_id);
     try {
-      await postJSON("/goals/contribute/", payload);
+      await postJSON("/goals/contribute", payload);
       contribModal.hide();
       contribForm.reset();
       toastMsg("Contribution added");
@@ -134,9 +137,9 @@ function setupForms() {
 
   // logout
   $("#logout")?.addEventListener("click", async () => {
-    try { await postJSON("/auth/logout/", {}); } catch (_) {}
+    try { await postJSON("/auth/logout", {}); } catch {}
     clearToken();
-    location.replace("login.html?next=dashboard.html");
+    redirectToLogin();
   });
 }
 
@@ -158,7 +161,7 @@ async function refreshAll() {
 }
 
 async function loadTransactionsAndCharts() {
-  const res = await getJSON(`/transactions/all/?start_date=${fmt(start)}&end_date=${fmt(end)}&page_size=2000`);
+  const res = await getJSON(`/transactions/all?start_date=${fmtDate(start)}&end_date=${fmtDate(end)}&page_size=2000`);
   const txns = (res.transactions || []).reverse();
 
   // cards
@@ -174,7 +177,7 @@ async function loadTransactionsAndCharts() {
   for (let i = 0; i < days; i++) {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
-    dayMap[fmt(d)] = { income: 0, expense: 0 };
+    dayMap[fmtDate(d)] = { income: 0, expense: 0 };
   }
   txns.forEach((t) => {
     const d = (t.created_at || "").slice(0, 10);
@@ -222,7 +225,7 @@ function renderDoughnut(labels, data) {
 }
 
 async function loadBudgetProgress() {
-  const r = await getJSON("/budgets/progress/");
+  const r = await getJSON("/budgets/progress");
   const box = $("#budgetProgress");
   box.innerHTML = "";
   if (!r.progress || r.progress.length === 0) {
@@ -246,7 +249,7 @@ async function loadBudgetProgress() {
 }
 
 async function loadAlerts() {
-  const r = await getJSON("/budgets/alerts/");
+  const r = await getJSON("/budgets/alerts");
   const menu = $("#notifMenu");
   const badge = $("#notifBadge");
   const alerts = r.alerts || [];
@@ -267,7 +270,7 @@ async function loadAlerts() {
 }
 
 async function loadInsights() {
-  const r = await getJSON("/insights/");
+  const r = await getJSON("/insights");
   const box = $("#insights-container");
   box.innerHTML = "";
   (r.advice || []).forEach((a) => {
@@ -279,7 +282,7 @@ async function loadInsights() {
 }
 
 async function loadRecentTx() {
-  const r = await getJSON(`/transactions/all/?start_date=${fmt(start)}&end_date=${fmt(end)}&page_size=10`);
+  const r = await getJSON(`/transactions/all?start_date=${fmtDate(start)}&end_date=${fmtDate(end)}&page_size=10`);
   const tbody = $("#recentTx");
   tbody.innerHTML = "";
   (r.transactions || []).forEach((t) => {
@@ -296,7 +299,7 @@ async function loadRecentTx() {
 }
 
 async function loadGoals() {
-  const r = await getJSON("/goals/");
+  const r = await getJSON("/goals");
   const box = $("#goalsList");
   box.innerHTML = "";
   if (!r.goals || r.goals.length === 0) {
@@ -330,7 +333,7 @@ async function loadGoals() {
   box.querySelectorAll("[data-action='delete']").forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!confirm("Delete this goal?")) return;
-      await delJSON(`/goals/${btn.dataset.id}/`);
+      await delJSON(`/goals/${btn.dataset.id}`);
       toastMsg("Goal deleted");
       await loadGoals();
     });
@@ -340,12 +343,10 @@ async function loadGoals() {
 // ---- Optional: browser notifications ----
 async function notifyNow(sendEmail = false) {
   try {
-    // new preview endpoint
     const res = await getJSON("/notifications/preview");
     const items = res?.alerts || [];
     if (!items.length) return;
 
-    // native notifications (optional)
     if ("Notification" in window) {
       if (Notification.permission === "default") {
         await Notification.requestPermission();
@@ -357,12 +358,10 @@ async function notifyNow(sendEmail = false) {
       }
     }
 
-    // email digest (optional)
     if (sendEmail) {
-      await postJSON("/notifications/send", {}); // new send endpoint
+      await postJSON("/notifications/send", {});
     }
   } catch (e) {
-    // don't spam the console or break the page if notifications are blocked
     console.debug("notify skipped:", e?.message || e);
   }
 }
