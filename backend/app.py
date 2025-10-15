@@ -40,19 +40,17 @@ def create_app() -> Flask:
     }
     allowed = {o.lower() for o in default_origins} | env_origins
 
-    def cors_origin(origin):
+    def cors_origin(origin: str | None) -> bool:
         # Flask-CORS will echo back the Origin we approve
         if not origin:
             return False
         return origin.lower() in allowed
 
-    # -------- Single CORS setup (credentials OFF) --------
-    # If later you switch to cookie/sessions from browser, set supports_credentials=True
-    # AND set <meta name="mm-use-credentials" content="true"> on the frontend.
+    # -------- Single CORS setup (credentials OFF to match frontend) --------
     CORS(
         app,
         resources={r"/api/*": {"origins": cors_origin}},
-        supports_credentials=False,
+        supports_credentials=False,  # flip to True only if you use browser cookies
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
         expose_headers=["Content-Type", "Authorization"],
@@ -66,16 +64,17 @@ def create_app() -> Flask:
             # Flask-CORS will add the appropriate headers
             return app.make_default_options_response()
 
-    # -------- DB init (your module may expose init_db or init_app) --------
+    # -------- DB init (won't crash the app if it fails) --------
     try:
         from .database import init_db
         init_db(app)
-    except Exception:
+    except Exception as e1:
         try:
             from .database import init_app as init_db_alt
             init_db_alt(app)
-        except Exception:
-            raise  # Surface exact error in Render logs
+        except Exception as e2:
+            # Log and continue so /api/health & preflight still work
+            print("[DB] Initialization failed:", repr(e1), "|", repr(e2))
 
     # -------- Blueprints --------
     from .routes.auth import auth_bp
@@ -127,4 +126,5 @@ def create_app() -> Flask:
 app = create_app()
 
 if __name__ == "__main__":
+    # Render start command should be:  gunicorn backend.app:app
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
