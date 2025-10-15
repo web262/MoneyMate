@@ -13,6 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    CORS(app)
 
     # Core app config
     app.config.update(
