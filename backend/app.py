@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    CORS(app)
+    CORS(app, supports_credentials=True, origins=["https://web262.github.io"])
 
     # Core app config
     app.config.update(
