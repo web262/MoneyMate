@@ -22,7 +22,7 @@ def _jwt_exp_hours() -> int:
 
 # ─────────────────── Helpers ───────────────────
 def _json_or_form():
-    """Safely read JSON or form."""
+    """Safely read JSON or form into a plain dict."""
     if request.is_json:
         return request.get_json(silent=True) or {}
     return request.form.to_dict(flat=True) or {}
@@ -72,7 +72,7 @@ def _decode_bearer_token():
 def get_current_user_id():
     """
     Prefer JWT (stateless). Keep session as a fallback for same-site demos.
-    NOTE: On GitHub Pages (cross-site), cookies may be blocked — the JWT path is what your UI should use.
+    NOTE: On GitHub Pages (cross-site), cookies may be blocked — use the JWT path.
     """
     uid, _ = _decode_bearer_token()
     if uid:
@@ -97,8 +97,11 @@ def login_required(fn):
     return wrapper
 
 # ─────────────────── Register ───────────────────
-@auth_bp.post("/register")
+@auth_bp.route("/register", methods=["POST", "OPTIONS"])
 def register():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
     name, email, password, confirm = _get_payload()
     if not name:
         return jsonify(ok=False, success=False, message="Name is required"), 400
@@ -120,7 +123,7 @@ def register():
     )
     db.commit()
 
-    # Issue token right away (so the user can proceed without separate login)
+    # Issue token right away (auto-login)
     user_id = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()["id"]
     token = generate_jwt(user_id, email)
     return jsonify(
@@ -130,28 +133,12 @@ def register():
         user={"id": user_id, "name": name, "email": email},
     ), 201
 
-
-# ─────────────────── Token verify (for SPA guard) ───────────────────
-# ─────────────────── Token verify (for SPA guard) ───────────────────
-# Use a unique endpoint name so we don't conflict with any existing route.
-@auth_bp.post("/token/verify", endpoint="token_verify_spa")
-def token_verify_spa():
-    """Validate Authorization: Bearer <jwt> and return basic user info."""
-    uid, email = _decode_bearer_token()
-    if not uid:
-        return jsonify(success=False, message="Invalid token"), 401
-
-    row = get_db().execute(
-        "SELECT id, name, email FROM users WHERE id=?", (uid,)
-    ).fetchone()
-
-    user = dict(row) if row else {"id": uid, "name": None, "email": email}
-    return jsonify(success=True, user=user)
-
-
 # ─────────────────── Login / Logout / Me ───────────────────
-@auth_bp.post("/login")
+@auth_bp.route("/login", methods=["POST", "OPTIONS"])
 def login():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
     _, email, password, _ = _get_payload()
     if not EMAIL_RE.match(email) or not password:
         return jsonify(ok=False, success=False, message="Invalid email or password"), 400
@@ -162,7 +149,7 @@ def login():
     if not row or not check_password_hash(row["password_hash"], password):
         return jsonify(ok=False, success=False, message="Invalid email or password"), 401
 
-    # Optional: keep a session for same-site deployments (not needed on GitHub Pages)
+    # Optional session for same-site deployments
     session["user_id"] = row["id"]
     session.permanent = True
 
@@ -173,13 +160,15 @@ def login():
         user={"id": row["id"], "name": row["name"], "email": row["email"]},
     )
 
-@auth_bp.post("/logout")
+@auth_bp.route("/logout", methods=["POST", "OPTIONS"])
 def logout():
+    if request.method == "OPTIONS":
+        return ("", 204)
     # Stateless JWT cannot be invalidated server-side; just clear session if any.
     session.pop("user_id", None)
     return jsonify(ok=True, success=True)
 
-@auth_bp.get("/me")
+@auth_bp.route("/me", methods=["GET"])
 def me():
     uid = get_current_user_id()
     if not uid:
@@ -187,16 +176,24 @@ def me():
     r = get_db().execute("SELECT id, name, email FROM users WHERE id=?", (uid,)).fetchone()
     return jsonify(ok=True, success=True, data=(dict(r) if r else None))
 
-# ─────────────────── Token verify/refresh (lightweight) ───────────────────
-@auth_bp.post("/token/verify")
+# ─────────────────── Token verify / refresh ───────────────────
+@auth_bp.route("/token/verify", methods=["POST", "OPTIONS"], endpoint="token_verify")
 def token_verify():
+    if request.method == "OPTIONS":
+        return ("", 204)
     uid, email = _decode_bearer_token()
     if not uid:
-        return jsonify(ok=False, success=False), 401
-    return jsonify(ok=True, success=True, user_id=uid, email=email)
+        return jsonify(success=False, ok=False, message="Invalid token"), 401
+    row = get_db().execute(
+        "SELECT id, name, email FROM users WHERE id=?", (uid,)
+    ).fetchone()
+    user = dict(row) if row else {"id": uid, "name": None, "email": email}
+    return jsonify(success=True, ok=True, user=user)
 
-@auth_bp.post("/token/refresh")
+@auth_bp.route("/token/refresh", methods=["POST", "OPTIONS"])
 def token_refresh():
+    if request.method == "OPTIONS":
+        return ("", 204)
     uid, email = _decode_bearer_token()
     if not uid:
         return jsonify(ok=False, success=False), 401
@@ -204,9 +201,12 @@ def token_refresh():
     return jsonify(ok=True, success=True, access_token=new_token)
 
 # ─────────────────── Change password ───────────────────
-@auth_bp.post("/change-password")
+@auth_bp.route("/change-password", methods=["POST", "OPTIONS"])
 @login_required
 def change_password():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
     uid = g.user_id
     data = _json_or_form()
     cur = data.get("current_password") or ""
@@ -228,8 +228,11 @@ def change_password():
     return jsonify(ok=True, success=True, message="Password changed")
 
 # ─────────────────── Forgot password ───────────────────
-@auth_bp.post("/forgot-start")
+@auth_bp.route("/forgot-start", methods=["POST", "OPTIONS"])
 def forgot_start():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
     data = _json_or_form()
     email = (data.get("email") or "").strip().lower()
     # always return ok to avoid account enumeration
@@ -257,8 +260,11 @@ def forgot_start():
     send_email(email, f"{app_name} – Reset your password", html, text)
     return jsonify(ok=True, success=True)
 
-@auth_bp.post("/forgot-complete")
+@auth_bp.route("/forgot-complete", methods=["POST", "OPTIONS"])
 def forgot_complete():
+    if request.method == "OPTIONS":
+        return ("", 204)
+
     data = _json_or_form()
     token = (data.get("token") or "").strip()
     new   = data.get("new_password") or ""
