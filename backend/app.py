@@ -19,6 +19,12 @@ def create_app() -> Flask:
     supports_credentials=False,
 )
 
+    @app.before_request
+def _cors_preflight():
+    if request.method == "OPTIONS":
+        # Return an empty 204; Flask-CORS will inject proper headers
+        return app.make_default_options_response()
+
     # Core app config
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me"),
