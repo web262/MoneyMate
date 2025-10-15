@@ -6,81 +6,78 @@ from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 from flask_cors import CORS
 
+# -------- Env & paths --------
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
 BASE_DIR = Path(__file__).resolve().parent
 
+
 def create_app() -> Flask:
     app = Flask(__name__)
-    CORS(
-    app,
-    resources={r"/api/*": {"origins": ["https://web262.github.io"]}},
-    supports_credentials=False,
-)
 
-    @app.before_request
-def _cors_preflight():
-    if request.method == "OPTIONS":
-        # Return an empty 204; Flask-CORS will inject proper headers
-        return app.make_default_options_response()
-
-    # Core app config
+    # -------- Core app config --------
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me"),
         JSON_SORT_KEYS=False,
         PERMANENT_SESSION_LIFETIME=timedelta(days=14),
     )
 
-    # Accept both /path and /path/ to avoid 308 redirects on preflight/Fetch
+    # Accept both /path and /path/ (avoid 308 on preflight/fetch)
     app.url_map.strict_slashes = False
 
-    # ---- CORS (recommended: echo origin when allowed, required for credentials) ----
-    # Default allowed origins (frontend on GitHub Pages + local dev + optional host)
+    # -------- Allowed Origins --------
+    # Default frontends + local dev; extend via ALLOWED_ORIGINS env (comma-separated)
     default_origins = {
         "https://web262.github.io",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "https://moneymate-2.onrender.com",
     }
-    env_origins = os.environ.get("ALLOWED_ORIGINS", "")
-    env_list = {o.strip().lower() for o in env_origins.split(",") if o.strip()}
+    env_origins = {
+        o.strip().lower()
+        for o in (os.environ.get("ALLOWED_ORIGINS", "")).split(",")
+        if o.strip()
+    }
+    allowed = {o.lower() for o in default_origins} | env_origins
 
-    allowed = {o.lower() for o in default_origins} | env_list
-
-    # Callable origin validator: returns True only for allowed origins.
-    # When a callable is provided, Flask-CORS will echo the request Origin header
-    # back in Access-Control-Allow-Origin when allowed — required when using credentials.
     def cors_origin(origin):
+        # Flask-CORS will echo back the Origin we approve
         if not origin:
             return False
         return origin.lower() in allowed
 
+    # -------- Single CORS setup (credentials OFF) --------
+    # If later you switch to cookie/sessions from browser, set supports_credentials=True
+    # AND set <meta name="mm-use-credentials" content="true"> on the frontend.
     CORS(
         app,
         resources={r"/api/*": {"origins": cors_origin}},
-        supports_credentials=True,  # ensure Access-Control-Allow-Credentials: true
+        supports_credentials=False,
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
         expose_headers=["Content-Type", "Authorization"],
         max_age=600,
     )
 
-    # ---- DB + routes ----
-    # Note: import/init function name should match your database module.
-    # If your database module exposes `init_app`, change the import accordingly.
+    # -------- Make OPTIONS preflight always succeed --------
+    @app.before_request
+    def _cors_preflight():
+        if request.method == "OPTIONS":
+            # Flask-CORS will add the appropriate headers
+            return app.make_default_options_response()
+
+    # -------- DB init (your module may expose init_db or init_app) --------
     try:
         from .database import init_db
         init_db(app)
     except Exception:
-        # Fallback to common alternative name if your database module uses init_app
         try:
             from .database import init_app as init_db_alt
             init_db_alt(app)
         except Exception:
-            # Let exceptions surface during deploy; helpful to see exact error in logs
-            raise
+            raise  # Surface exact error in Render logs
 
+    # -------- Blueprints --------
     from .routes.auth import auth_bp
     from .routes.transactions import tx_bp
     from .routes.budgets import budgets_bp
@@ -97,19 +94,23 @@ def _cors_preflight():
     app.register_blueprint(settings_bp)
     app.register_blueprint(notifications_bp)
 
+    # -------- Health & root --------
     @app.get("/api/health")
     def health():
-        return jsonify({"ok": True})
+        return jsonify({"ok": True}), 200
 
     @app.get("/")
     def index():
-        return jsonify({
-            "service": "MoneyMate API",
-            "docs": "/api/health",
-            "frontend": "https://web262.github.io/MoneyMate",
-            "cors_allowed": sorted(list(allowed)),
-        })
+        return jsonify(
+            {
+                "service": "MoneyMate API",
+                "docs": "/api/health",
+                "frontend": "https://web262.github.io/MoneyMate",
+                "cors_allowed": sorted(list(allowed)),
+            }
+        )
 
+    # -------- Error handlers --------
     @app.errorhandler(404)
     def not_found(e):
         return jsonify({"ok": False, "error": "Not found"}), 404
@@ -118,9 +119,10 @@ def _cors_preflight():
     def server_error(e):
         return jsonify({"ok": False, "error": "Internal server error"}), 500
 
-    # Helpful log on startup (shows which origins are accepted)
+    # Helpful log on startup
     print("\n[CORS] Allowed origins:", sorted(list(allowed)), "\n")
     return app
+
 
 app = create_app()
 
