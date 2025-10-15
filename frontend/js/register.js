@@ -52,26 +52,23 @@ import { registerAccount } from './api.js';
       // Map full_name -> name for the backend. confirm is only for client-side match.
       const data = await registerAccount({ name: full_name, email, password });
 
-      // If your backend returns {success:true} (optional check)
+      // If your backend returns {success:false}
       if (data?.success === false) {
         throw new Error(data?.message || 'Registration failed');
       }
 
       // Success → send user to Login
       window.location.href = 'login.html?registered=1';
-      return;
     } catch (err) {
-      // Friendly error mapping where possible
       const msg = (err && err.message) || 'Registration failed';
-      if (/409/.test(msg) || /already/i.test(msg)) {
+      if ((err?.status === 409) || /already/i.test(msg)) {
         showError('Email already registered.');
-      } else if (/400/.test(msg) || /invalid/i.test(msg)) {
+      } else if ((err?.status === 400) || /invalid/i.test(msg)) {
         showError('Invalid data. Please check your inputs.');
       } else {
         showError(msg);
       }
     } finally {
-      // Restore button
       if (btn) {
         btn.disabled = false;
         btn.innerHTML = `<i class="fa-solid fa-user-check me-2"></i> Create account`;
